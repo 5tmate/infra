@@ -1,0 +1,37 @@
+name: DNS
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'dns/**'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'dns/**'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN_DNS }}
+          aws-region: us-east-1
+
+      - name: Login and get passphrase
+        run: bash scripts/get-passphrase.sh dns
+
+      - uses: pulumi/actions@v6
+        with:
+          command: ${{ github.event_name == 'pull_request' && 'preview' || 'up' }}
+          stack-name: prod
+          work-dir: dns
