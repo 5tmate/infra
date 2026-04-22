@@ -36,7 +36,7 @@ _get_passphrase() {
     return 1
   fi
 
-  local backend_url="${backend}/${stack}?region=ap-northeast-1"
+  local backend_url="${backend}?region=ap-northeast-1"
 
   pulumi login "$backend_url" || {
     echo "Error: pulumi login failed." >&2
