@@ -1,0 +1,7 @@
+name: 5tmate-dns
+runtime:
+  name: python
+  options:
+    toolchain: uv
+    virtualenv: .venv
+description: DNS stack for 5tmate.threatreveal.org

@@ -1,0 +1,5 @@
+config:
+  aws:region: us-east-1
+  5tmate-dns:subdomain: 5tmate
+  5tmate-dns:parent_domain: threatreveal.org
+encryptionsalt: v1:9bnM9RGkh1s=:v1:mEmZcx/wE5iLwVp+:sMoG/YidJsXTBYmKue2oVpCsNLK7mA==
