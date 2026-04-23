@@ -1,6 +1,9 @@
 import pulumi
 import pulumi_aws as aws
+import pulumi_command as command 
 
+config = pulumi.Config()
+version = config.require("version")
 dns = pulumi.StackReference("organization/5tmate-dns/prod")
 zone_id = dns.get_output("zone_id")
 cert_arn = dns.get_output("cert_arn")
@@ -80,3 +83,37 @@ www_record = aws.route53.Record(
         "evaluate_target_health": False,
     }],
 )
+
+# download release
+
+deploy_cmd = command.local.Command(
+    "deploy-release",
+    create=pulumi.Output.all(
+        bucket_name=bucket.bucket,
+        distribution_id=distribution.id,
+    ).apply(
+        lambda args: f"""set -euo pipefail
+TMPDIR=$(mktemp -d)
+trap 'rm -rf "$TMPDIR"' EXIT
+
+URL="https://github.com/5tmate/landing/releases/download/{version}/dist-{version}.zip"
+curl -fsSL -o "$TMPDIR/dist.zip" "$URL"
+unzip -q "$TMPDIR/dist.zip" -d "$TMPDIR"
+
+aws s3 sync "$TMPDIR/dist" "s3://{args['bucket_name']}/" --delete
+
+aws cloudfront create-invalidation \\
+  --distribution-id "{args['distribution_id']}" \\
+  --paths '/*'
+"""
+    ),
+    interpreter=["/bin/bash", "-c"],
+    triggers=[version],
+)
+
+
+
+pulumi.export("deployed_version", version)
+pulumi.export("bucket_name", bucket.bucket)
+pulumi.export("distribution_domain", distribution.domain_name)
+pulumi.export("distribution_id", distribution.id)
