@@ -30,9 +30,15 @@ jobs:
       - name: Login and get passphrase
         run: bash scripts/get-passphrase.sh landing
 
+      - name: Capture backend url
+        id: backend
+        run: |
+          test -n "$PULUMI_BACKEND_URL"
+          echo "backend_url=$PULUMI_BACKEND_URL" >> "$GITHUB_OUTPUT"
+
       - uses: pulumi/actions@v6
         with:
           command: ${{ github.event_name == 'pull_request' && 'preview' || 'up' }}
           stack-name: prod
           work-dir: landing
-          cloud-url: ${{ env.PULUMI_BACKEND_URL }}
+          cloud-url: ${{ steps.backend.outputs.backend_url }}
