@@ -1,4 +1,4 @@
-STACKS = dns landing
+STACKS = dns landing poc-workflow
 
 .PHONY: fmt lint check sync
 

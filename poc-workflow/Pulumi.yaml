@@ -1,0 +1,7 @@
+name: 5tmate-poc-workflow
+runtime:
+  name: python
+  options:
+    toolchain: uv
+    virtualenv: .venv
+description: Fake-vulnerable workflows poc-workflow (Lambda + CloudFront) at poc-workflows.5tmate.threatreveal.org
