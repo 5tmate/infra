@@ -1,0 +1,44 @@
+name: poc-workflow
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'poc-workflow/**'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'poc-workflow/**'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN_POC_WORKFLOW }}
+          aws-region: us-east-1
+
+      - name: Login and get passphrase
+        run: bash scripts/get-passphrase.sh poc-workflow
+
+      - name: Capture backend url
+        id: backend
+        run: |
+          test -n "$PULUMI_BACKEND_URL"
+          echo "backend_url=$PULUMI_BACKEND_URL" >> "$GITHUB_OUTPUT"
+
+      - uses: pulumi/actions@v6
+        with:
+          command: ${{ github.event_name == 'pull_request' && 'preview' || 'up' }}
+          stack-name: prod
+          work-dir: poc-workflow
+          cloud-url: ${{ steps.backend.outputs.backend_url }}

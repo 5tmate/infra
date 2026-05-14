@@ -1,0 +1,7 @@
+name: 5tmate-landing
+runtime:
+  name: python
+  options:
+    toolchain: uv
+    virtualenv: .venv
+description: Landing stack (S3 + CloudFront) for 5tmate.threatreveal.org

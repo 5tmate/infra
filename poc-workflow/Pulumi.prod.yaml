@@ -1,0 +1,5 @@
+config:
+  aws:region: us-east-1
+  5tmate-poc-workflow:domain: poc-workflows.5tmate.threatreveal.org
+  5tmate-poc-workflow:version: 1.100.0
+encryptionsalt: v1:8vwQcVU0BVQ=:v1:96MF/JPGofi/Gs6X:PXRufNkbE3YX2PrmlcaGC10goDfKfQ==
