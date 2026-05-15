@@ -33,7 +33,7 @@ export const etcPasswdResult = {
 };
 
 export const commandOutputResult = {
-  outputs: [{ result: "uid=0(root) gid=0(root) groups=0(root)" }],
+  outputs: [{ result: "uid=0(root) gid=0(root) groups=0(root)", xmsg: "" }],
 };
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
