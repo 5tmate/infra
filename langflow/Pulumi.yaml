@@ -4,4 +4,4 @@ runtime:
   options:
     toolchain: uv
     virtualenv: .venv
-description: Fake-vulnerable Langflow honeypot (Lambda + Function URL only)
+description: Fake-vulnerable Langflow honeypot (Lambda + Function URL behind CloudFront)
