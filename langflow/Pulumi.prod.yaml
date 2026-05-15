@@ -1,0 +1,4 @@
+config:
+  aws:region: us-east-1
+  5tmate-langflow:version: 1.2.0
+encryptionsalt: v1:zA149ECfRbg=:v1:j8F9Kz/zgAZAtGqa:UPDBpK2VoKkRO9OsMkLvDjjLnauZYA==
