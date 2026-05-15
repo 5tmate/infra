@@ -3,6 +3,7 @@ import {
   LANGFLOW_VERSION,
   commandOutputResult,
   etcPasswdResult,
+  faviconBytes,
   homepageHtml,
 } from "./langflow.mjs";
 
@@ -14,8 +15,21 @@ const json = (body, status = 200) => ({
 
 const html = (body) => ({
   statusCode: 200,
-  headers: { "content-type": "text/html; charset=utf-8" },
+  headers: {
+    "content-type": "text/html; charset=utf-8",
+    "cache-control": "no-store",
+  },
   body,
+});
+
+const favicon = () => ({
+  statusCode: 200,
+  headers: {
+    "content-type": "image/x-icon",
+    "cache-control": "public, max-age=86400",
+  },
+  body: faviconBytes.toString("base64"),
+  isBase64Encoded: true,
 });
 
 const getBody = (event) => {
@@ -46,6 +60,10 @@ export const handler = async (event) => {
 
   if (method === "GET" && path === "/api/v1/version") {
     return json({ package: "Langflow", version: LANGFLOW_VERSION });
+  }
+
+  if (method === "GET" && path === "/favicon.ico") {
+    return favicon();
   }
 
   if (method === "GET") {
