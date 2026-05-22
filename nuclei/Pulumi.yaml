@@ -1,0 +1,7 @@
+name: 5tmate-nuclei
+runtime:
+  name: python
+  options:
+    toolchain: uv
+    virtualenv: .venv
+description: Nuclei scan runner — Lambda Function URL + Fargate ECS tasks

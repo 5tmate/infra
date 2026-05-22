@@ -1,4 +1,4 @@
-STACKS = dns landing
+STACKS = dns landing nuclei
 
 .PHONY: fmt lint check sync
 
