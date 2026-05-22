@@ -20,11 +20,12 @@ ADAPTER_LAYER = (
 
 # VPC default lookup
 
-vpc = aws.ec2.get_vpc(default=True)
+default_vpcs = aws.ec2.get_vpcs(filters=[{"name": "is-default", "values": ["true"]}])
+vpc_id = default_vpcs.ids[0]
 subnet_lookup = aws.ec2.get_subnets(
-    filters=[{"name": "vpc-id", "values": [vpc.id]}],
+    filters=[{"name": "vpc-id", "values": [vpc_id]}],
 )
-default_sg = aws.ec2.get_security_group(vpc_id=vpc.id, name="default")
+default_sg = aws.ec2.get_security_group(vpc_id=vpc_id, name="default")
 
 # ECR for Fargate
 
