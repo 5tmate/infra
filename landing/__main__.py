@@ -45,6 +45,7 @@ distribution = aws.cloudfront.Distribution(
         "allowed_methods": ["GET", "HEAD"],
         "cached_methods": ["GET", "HEAD"],
         "cache_policy_id": "658327ea-f89d-4fab-a63d-7e88639e58f6",
+        "compress": True,
     },
     viewer_certificate={
         "acm_certificate_arn": cert_arn,
