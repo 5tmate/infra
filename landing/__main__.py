@@ -100,7 +100,17 @@ URL="https://github.com/5tmate/landing/releases/download/{version}/dist-{version
 curl -fsSL -o "$TMPDIR/dist.zip" "$URL"
 unzip -q "$TMPDIR/dist.zip" -d "$TMPDIR"
 
-aws s3 sync "$TMPDIR/dist" "s3://{args['bucket_name']}/" --delete
+# Hashed bundles under /assets/ are immutable for a year.
+aws s3 sync "$TMPDIR/dist/assets" "s3://{args['bucket_name']}/assets" \\
+  --delete \\
+  --cache-control 'public, max-age=31536000, immutable'
+
+# Everything else (index.html, robots.txt, sitemap.xml, favicon, og.png, icons.svg)
+# must revalidate so deploys are picked up immediately.
+aws s3 sync "$TMPDIR/dist" "s3://{args['bucket_name']}/" \\
+  --delete \\
+  --exclude 'assets/*' \\
+  --cache-control 'public, max-age=0, must-revalidate'
 
 aws cloudfront create-invalidation \\
   --distribution-id "{args['distribution_id']}" \\
