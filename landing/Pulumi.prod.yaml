@@ -1,0 +1,4 @@
+encryptionsalt: v1:xDxiRTBb2vE=:v1:A98nD7OaciJRDeA4:f60lijCbZxnVD/qxP+MyljMMjzK4Fg==
+config:
+  aws:region: us-east-1
+  5tmate-landing:version: v1.0.1

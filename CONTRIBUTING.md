@@ -18,7 +18,7 @@ Add the following to `~/.aws/config`, replacing `<your-profile>` with your AWS p
 
 ```ini
 [profile pulumi]
-credential_process = aws configure export-credentials --profile <your-profile> --format json
+credential_process = aws configure export-credentials --profile <your-profile>
 region = ap-northeast-1
 ```
 
