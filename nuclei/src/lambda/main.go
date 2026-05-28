@@ -26,6 +26,7 @@ func main() {
 		var req struct {
 			Target    string   `json:"target"    binding:"required"`
 			Templates []string `json:"templates" binding:"required,min=1"`
+			Capacity  string   `json:"capacity"  binding:"required,oneof=FARGATE FARGATE_SPOT"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(400, gin.H{"error": err.Error()})
@@ -36,7 +37,9 @@ func main() {
 		out, err := client.RunTask(c.Request.Context(), &ecs.RunTaskInput{
 			Cluster:        aws.String(os.Getenv("CLUSTER_ARN")),
 			TaskDefinition: aws.String(os.Getenv("TASK_DEFINITION_ARN")),
-			LaunchType:     ecstypes.LaunchTypeFargate,
+			CapacityProviderStrategy: []ecstypes.CapacityProviderStrategyItem{
+				{CapacityProvider: aws.String(req.Capacity), Weight: 1},
+			},
 			NetworkConfiguration: &ecstypes.NetworkConfiguration{
 				AwsvpcConfiguration: &ecstypes.AwsVpcConfiguration{
 					Subnets:        strings.Split(os.Getenv("SUBNETS"), ","),

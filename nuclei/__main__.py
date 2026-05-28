@@ -69,6 +69,12 @@ ecs_logs = aws.cloudwatch.LogGroup(
 
 cluster = aws.ecs.Cluster("nuclei", name="nuclei", tags=tags)
 
+aws.ecs.ClusterCapacityProviders(
+    "nuclei-capacity",
+    cluster_name=cluster.name,
+    capacity_providers=["FARGATE", "FARGATE_SPOT"],
+)
+
 # ECS task roles
 
 ecs_tasks_assume = pulumi.Output.json_dumps(
