@@ -25,11 +25,16 @@ func main() {
 	r.POST("/", func(c *gin.Context) {
 		var req struct {
 			Target    string   `json:"target"    binding:"required"`
-			Templates []string `json:"templates" binding:"required,min=1"`
+			Templates []string `json:"templates"`
+			Tags      []string `json:"tags"`
 			Capacity  string   `json:"capacity"  binding:"required,oneof=FARGATE FARGATE_SPOT"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(400, gin.H{"error": err.Error()})
+			return
+		}
+		if (len(req.Templates) == 0) == (len(req.Tags) == 0) {
+			c.JSON(400, gin.H{"error": "exactly one of 'templates' or 'tags' is required"})
 			return
 		}
 
@@ -54,6 +59,7 @@ func main() {
 						{Name: aws.String("RUN_ID"), Value: aws.String(runID)},
 						{Name: aws.String("TARGET"), Value: aws.String(req.Target)},
 						{Name: aws.String("TEMPLATES"), Value: aws.String(strings.Join(req.Templates, ","))},
+						{Name: aws.String("TAGS"), Value: aws.String(strings.Join(req.Tags, ","))},
 					},
 				}},
 			},
