@@ -1,4 +1,4 @@
-STACKS = dns landing
+STACKS = dns landing waf
 
 .PHONY: fmt lint check sync
 
