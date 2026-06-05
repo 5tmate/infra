@@ -11,6 +11,9 @@ dns = pulumi.StackReference("organization/5tmate-dns/prod")
 zone_id = dns.get_output("zone_id")
 cert_arn = dns.get_output("cert_arn")
 
+waf = pulumi.StackReference("organization/5tmate-waf/prod")
+web_acl_arn = waf.get_output("langflow_web_acl_arn")
+
 tags = {"App": "5tmate"}
 
 # Lambda execution role: CloudWatch Logs only, no AWS data access.
@@ -88,6 +91,7 @@ distribution = aws.cloudfront.Distribution(
     enabled=True,
     is_ipv6_enabled=True,
     aliases=[domain],
+    web_acl_id=web_acl_arn,
     origins=[
         {
             "domain_name": furl_host,
