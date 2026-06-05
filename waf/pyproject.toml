@@ -1,0 +1,22 @@
+[project]
+name = "5tmate-waf"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "pulumi>=3.0.0,<4.0.0",
+    "pulumi-aws>=6.0.0,<7.0.0",
+]
+
+[tool.uv]
+dev-dependencies = [
+    "ruff>=0.11.0",
+]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["rules"]

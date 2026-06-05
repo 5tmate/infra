@@ -1,0 +1,7 @@
+name: 5tmate-waf
+runtime:
+  name: python
+  options:
+    toolchain: uv
+    virtualenv: .venv
+description: WAF stack for 5tmate.threatreveal.org
