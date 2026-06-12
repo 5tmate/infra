@@ -1,3 +1,5 @@
 encryptionsalt: v1:RYQARaP2FYk=:v1:zDBtpip7hvdjVAfh:31pHB+ogjVUcTDJT7vrEE19Jn0YciA==
 config:
   aws:region: ap-northeast-1
+  5tmate-metabase:allowed_ssh_cidr: 1.163.232.110/32
+  5tmate-metabase:ssh_public_key: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDWaeSPMvL7cYn0bksFJQyPmhk7dTlEBJh8/3v6V8Exs jerryfang6606@gmail.com
