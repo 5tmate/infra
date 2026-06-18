@@ -11,7 +11,7 @@ AZ = "ap-northeast-1a"
 tags = {"App": "5tmate", "ManagedBy": "pulumi"}
 
 config = pulumi.Config()
-allowed_ssh_cidr = config.require("allowed_ssh_cidr")  
+allowed_ssh_cidr = config.require("allowed_ssh_cidr")
 
 
 vpc = aws.ec2.Vpc(
@@ -59,6 +59,23 @@ aws.ec2.RouteTableAssociation(
 )
 
 
+nuclei_sg = aws.ec2.SecurityGroup(
+    "nuclei-sg",
+    vpc_id=vpc.id,
+    description="nuclei task",
+    egress=[
+        {
+            "description": "all outbound (scan target + nuclei templates)",
+            "protocol": "-1",
+            "from_port": 0,
+            "to_port": 0,
+            "cidr_blocks": ["0.0.0.0/0"],
+        }
+    ],
+    tags={**tags, "Name": "5tmate-nuclei-sg"},
+)
+
+
 ssh_sg = aws.ec2.SecurityGroup(
     "ssh-sg",
     vpc_id=vpc.id,
@@ -70,7 +87,14 @@ ssh_sg = aws.ec2.SecurityGroup(
             "from_port": 22,
             "to_port": 22,
             "cidr_blocks": [allowed_ssh_cidr],
-        }
+        },
+        {
+            "description": "Metabase from nuclei SG",
+            "protocol": "tcp",
+            "from_port": 3000,
+            "to_port": 3000,
+            "security_groups": [nuclei_sg.id],
+        },
     ],
     egress=[
         {
@@ -148,6 +172,7 @@ pulumi.export("subnet_id", subnet.id)
 pulumi.export("igw_id", igw.id)
 pulumi.export("route_table_id", route_table.id)
 pulumi.export("security_group_id", ssh_sg.id)
+pulumi.export("nuclei_sg_id", nuclei_sg.id)
 pulumi.export("public_ip", instance.public_ip)
 pulumi.export("public_dns", instance.public_dns)
 pulumi.export("instance_id", instance.id)
