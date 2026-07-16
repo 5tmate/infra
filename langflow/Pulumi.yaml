@@ -1,0 +1,7 @@
+name: 5tmate-langflow
+runtime:
+  name: python
+  options:
+    toolchain: uv
+    virtualenv: .venv
+description: Fake-vulnerable Langflow honeypot (Lambda + Function URL behind CloudFront)
