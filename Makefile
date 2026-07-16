@@ -1,4 +1,4 @@
-STACKS = dns landing langflow
+STACKS = dns landing
 
 .PHONY: fmt lint check sync
 
