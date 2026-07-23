@@ -1,4 +1,6 @@
 import json
+import os
+import tempfile
 from datetime import datetime, timedelta, timezone
 
 import boto3
@@ -31,13 +33,15 @@ def handler(event, context):
     con = duckdb.connect()
     ingest.create_table(con)
     records = rows = skipped = 0
-    for key in keys:
-        text = ingest.read_body(key, s3.get_object(Bucket=BUCKET, Key=key)["Body"].read())
-        object_rows, object_records, object_skipped = ingest.parse_object(text, key)
-        ingest.load(con, object_rows)
-        rows += len(object_rows)
-        records += object_records
-        skipped += object_skipped
+    with tempfile.TemporaryDirectory() as tmp:
+        for i, key in enumerate(keys):
+            path = os.path.join(tmp, f"{i:06d}-{os.path.basename(key)}")
+            s3.download_file(BUCKET, key, path)
+            file_records, file_rows, file_skipped = ingest.load_file(con, path, key)
+            records += file_records
+            rows += file_rows
+            skipped += file_skipped
+            os.remove(path)
 
     findings = analysis.run(con)
     summary = {

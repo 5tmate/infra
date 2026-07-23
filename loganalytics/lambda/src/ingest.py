@@ -1,9 +1,3 @@
-import gzip
-import json
-from datetime import datetime, timezone
-
-KNOWN_KEYS = {"accountId", "logGroup", "logStream", "id", "timestamp", "message"}
-
 DDL = """
 CREATE TABLE requests (
     ts TIMESTAMP,
@@ -21,72 +15,44 @@ CREATE TABLE requests (
 )
 """
 
+RAW_COLUMNS = (
+    "{'accountId': 'VARCHAR', 'logGroup': 'VARCHAR', 'logStream': 'VARCHAR', "
+    "'id': 'VARCHAR', 'timestamp': 'BIGINT', 'message': 'VARCHAR'}"
+)
 
-def read_body(key, body):
-    if key.endswith(".gz"):
-        body = gzip.decompress(body)
-    return body.decode("utf-8", "replace")
-
-
-def split_records(text):
-    records, current = [], {}
-    for line in text.splitlines():
-        if not line.strip():
-            if current:
-                records.append(current)
-                current = {}
-            continue
-        key, sep, value = line.partition(" = ")
-        if sep and key.strip() in KNOWN_KEYS:
-            current[key.strip()] = value
-    if current:
-        records.append(current)
-    return records
-
-
-def parse_record(record, s3_key):
-    message = record.get("message", "")
-    if not message.lstrip().startswith("{"):
-        return None
-    data = json.loads(message)
-    ts = None
-    if record.get("timestamp", "").isdigit():
-        ms = int(record["timestamp"])
-        ts = datetime.fromtimestamp(ms / 1000, tz=timezone.utc).replace(tzinfo=None)
-    return (
-        ts,
-        data.get("method"),
-        data.get("path"),
-        data.get("query"),
-        data.get("client_ip"),
-        data.get("ip"),
-        data.get("status"),
-        json.dumps(data.get("headers", {}), ensure_ascii=False),
-        data.get("body"),
-        data.get("body_bytes"),
-        data.get("body_truncated"),
-        s3_key,
-    )
-
-
-def parse_object(text, s3_key):
-    rows, records, skipped = [], 0, 0
-    for record in split_records(text):
-        records += 1
-        try:
-            row = parse_record(record, s3_key)
-        except json.JSONDecodeError:
-            skipped += 1
-            continue
-        if row is not None:
-            rows.append(row)
-    return rows, records, skipped
+INSERT = """
+INSERT INTO requests
+SELECT
+    make_timestamp("timestamp" * 1000),
+    json_extract_string(message, '$.method'),
+    json_extract_string(message, '$.path'),
+    json_extract_string(message, '$.query'),
+    json_extract_string(message, '$.client_ip'),
+    json_extract_string(message, '$.ip'),
+    CAST(json_extract(message, '$.status') AS INTEGER),
+    CAST(json_extract(message, '$.headers') AS VARCHAR),
+    json_extract_string(message, '$.body'),
+    CAST(json_extract(message, '$.body_bytes') AS BIGINT),
+    CAST(json_extract(message, '$.body_truncated') AS BOOLEAN),
+    ?
+FROM raw WHERE message LIKE '{%' AND json_valid(message)
+"""
 
 
 def create_table(con):
     con.execute(DDL)
 
 
-def load(con, rows):
-    if rows:
-        con.executemany("INSERT INTO requests VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
+def load_file(con, path, s3_key):
+    escaped = path.replace("'", "''")
+    con.execute(
+        f"CREATE OR REPLACE TEMP TABLE raw AS "
+        f"SELECT * FROM read_json('{escaped}', format='newline_delimited', "
+        f"compression='zstd', columns={RAW_COLUMNS})"
+    )
+    records, skipped = con.execute(
+        "SELECT count(*), "
+        "count(*) FILTER (WHERE message LIKE '{%' AND NOT json_valid(message)) FROM raw"
+    ).fetchone()
+    rows = con.execute(INSERT, [s3_key]).fetchone()[0]
+    return records, rows, skipped
