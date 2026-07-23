@@ -47,7 +47,6 @@ aws.iam.RolePolicy(
     ),
 )
 
-
 fn = aws.lambda_.Function(
     "loganalytics",
     runtime="python3.12",
@@ -57,6 +56,27 @@ fn = aws.lambda_.Function(
     memory_size=512,
     timeout=120,
     tags=tags,
+)
+
+schedule = aws.cloudwatch.EventRule(
+    "loganalytics-schedule",
+    schedule_expression="cron(5 * * * ? *)",
+    tags=tags,
+)
+
+aws.lambda_.Permission(
+    "loganalytics-schedule-invoke",
+    action="lambda:InvokeFunction",
+    function=fn.name,
+    principal="events.amazonaws.com",
+    source_arn=schedule.arn,
+)
+
+aws.cloudwatch.EventTarget(
+    "loganalytics-schedule-target",
+    rule=schedule.name,
+    arn=fn.arn,
+    input="{}",
 )
 
 pulumi.export("function_name", fn.name)
