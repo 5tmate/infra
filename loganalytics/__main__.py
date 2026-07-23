@@ -53,7 +53,9 @@ fn = aws.lambda_.Function(
     runtime="python3.12",
     handler="handler.handler",
     role=role.arn,
-    code=pulumi.FileArchive("./lambda/src"),
+    code=pulumi.FileArchive("./lambda/build"),
+    memory_size=512,
+    timeout=120,
     tags=tags,
 )
 
