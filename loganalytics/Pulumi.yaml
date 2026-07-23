@@ -1,0 +1,7 @@
+name: 5tmate-loganalytics
+runtime:
+  name: python
+  options:
+    toolchain: uv
+    virtualenv: .venv
+description: Log analytics stack for 5tmate
