@@ -92,7 +92,7 @@ fn = aws.lambda_.Function(
 
 schedule = aws.cloudwatch.EventRule(
     "loganalytics-schedule",
-    schedule_expression="cron(5 * * * ? *)",
+    schedule_expression="cron(30 0 * * ? *)",
     tags=tags,
 )
 
