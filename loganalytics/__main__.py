@@ -60,7 +60,7 @@ aws.s3.BucketPublicAccessBlock(
 )
 
 aws.iam.RolePolicy(
-    "loganalytics-s3-write",
+    "loganalytics-s3-output",
     role=role.name,
     policy=output_bucket.arn.apply(
         lambda arn: json.dumps(
@@ -69,9 +69,14 @@ aws.iam.RolePolicy(
                 "Statement": [
                     {
                         "Effect": "Allow",
-                        "Action": "s3:PutObject",
+                        "Action": ["s3:GetObject", "s3:PutObject"],
                         "Resource": f"{arn}/*",
-                    }
+                    },
+                    {
+                        "Effect": "Allow",
+                        "Action": "s3:ListBucket",
+                        "Resource": arn,
+                    },
                 ],
             }
         )
