@@ -52,31 +52,18 @@ SELECT
     * EXCLUDE (sb),
     CASE
         WHEN method = 'POST' AND path = '/api/v1/validate/code' THEN 'cve_2025_3248'
-        WHEN method = 'POST' AND path LIKE '/api/v1/build_public_tmp/%/flow' THEN 'cve_2026_33017'
-        WHEN method = 'POST' AND path = '/api/v1/login' THEN 'login_probe'
-        WHEN method = 'GET' AND path IN ('/', '/api/v1/version') THEN 'langflow_detect'
-        ELSE 'other_probe'
+        WHEN method = 'POST' AND path LIKE '/api/v1/build_public_tmp/%/flow'
+            AND json_type(sb, '$.data') IS NOT NULL THEN 'cve_2026_33017'
     END AS category,
     json_extract_string(sb, '$.code') AS code,
-    CASE
-        WHEN NOT (method = 'POST' AND path LIKE '/api/v1/build_public_tmp/%/flow') THEN NULL
-        WHEN json_type(sb, '$.data') IS NULL THEN 'normal'
-        WHEN json_type(sb, '$.data') = 'NULL' THEN 'data_null'
-        WHEN coalesce(json_array_length(sb, '$.data.nodes'), 0) > 0 THEN 'exploit'
-        WHEN json_type(sb, '$.data') = 'OBJECT' THEN 'data_empty'
-        ELSE 'other'
-    END AS build_verdict,
     regexp_matches(coalesce(body, ''), ?, 'i') AS oast_callback
 FROM base
 """
 
 FINDINGS = """
-SELECT ts, client_ip, method, path, category, code, build_verdict, oast_callback, s3_key
+SELECT ts, client_ip, method, path, category, code, oast_callback, s3_key
 FROM classified
-WHERE category = 'cve_2025_3248'
-    OR (category = 'cve_2026_33017' AND build_verdict <> 'normal')
-    OR category = 'login_probe'
-    OR category = 'other_probe'
+WHERE category IS NOT NULL
 ORDER BY ts
 """
 
@@ -87,7 +74,6 @@ FINDING_COLUMNS = [
     "path",
     "category",
     "code",
-    "build_verdict",
     "oast_callback",
     "s3_key",
 ]
