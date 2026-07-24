@@ -12,6 +12,8 @@ import ingest
 BUCKET = "5tmate-langflow-logs"
 OUTPUT_BUCKET = os.environ.get("OUTPUT_BUCKET", "5tmate-loganalytics")
 
+SOURCE_PREFIX = "AWSLogs/227469555418/us-east-1/_aws_lambda_langflow/"
+
 RECORD_FIELDS = [
     "ts",
     "client_ip",
@@ -25,12 +27,11 @@ RECORD_FIELDS = [
 ]
 
 
-def select_keys(objects, now, scope):
+def source_prefix(now, scope):
     if scope == "all":
-        return [key for key, _ in objects]
-    end = now.replace(minute=0, second=0, microsecond=0)
-    start = end - timedelta(hours=1)
-    return [key for key, modified in objects if start <= modified < end]
+        return SOURCE_PREFIX
+    start = now.replace(minute=0, second=0, microsecond=0) - timedelta(hours=1)
+    return SOURCE_PREFIX + f"{start:%Y/%m/%d/%H}/"
 
 
 def findings_key(now, scope):
@@ -52,12 +53,14 @@ def handler(event, context):
     scope = (event or {}).get("scope", "hour")
     now = datetime.now(timezone.utc)
     s3 = boto3.client("s3")
-    objects = [
-        (obj["Key"], obj["LastModified"])
-        for page in s3.get_paginator("list_objects_v2").paginate(Bucket=BUCKET)
+    keys = [
+        obj["Key"]
+        for page in s3.get_paginator("list_objects_v2").paginate(
+            Bucket=BUCKET, Prefix=source_prefix(now, scope)
+        )
         for obj in page.get("Contents", [])
+        if obj["Key"].endswith(".zst")
     ]
-    keys = select_keys(objects, now, scope)
 
     con = duckdb.connect()
     ingest.create_table(con)

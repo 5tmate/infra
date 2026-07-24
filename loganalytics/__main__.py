@@ -47,6 +47,7 @@ aws.iam.RolePolicy(
     ),
 )
 
+
 output_bucket = aws.s3.BucketV2("loganalytics-output", bucket="5tmate-loganalytics", tags=tags)
 
 aws.s3.BucketPublicAccessBlock(
