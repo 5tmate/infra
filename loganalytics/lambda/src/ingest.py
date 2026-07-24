@@ -20,6 +20,7 @@ RAW_COLUMNS = (
     "'id': 'VARCHAR', 'timestamp': 'BIGINT', 'message': 'VARCHAR'}"
 )
 
+
 INSERT = """
 INSERT INTO requests
 SELECT

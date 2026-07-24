@@ -38,10 +38,6 @@ CODE_INDICATORS = [
 ]
 CALLBACK_PATTERN = re.compile("|".join(CODE_INDICATORS), re.IGNORECASE)
 
-OAST_RE = (
-    r"[a-z0-9.-]+\.(interactsh\.com|oast\.(fun|site|pro|live|me)|oastify\.com|canarytokens\.com)"
-)
-
 CLASSIFY = """
 CREATE OR REPLACE TEMP TABLE classified AS
 WITH base AS (
@@ -55,15 +51,13 @@ SELECT
         WHEN method = 'POST' AND path LIKE '/api/v1/build_public_tmp/%/flow'
             AND json_type(sb, '$.data') IS NOT NULL THEN 'cve_2026_33017'
     END AS category,
-    json_extract_string(sb, '$.code') AS code,
-    regexp_matches(coalesce(body, ''), ?, 'i') AS oast_callback
+    json_extract_string(sb, '$.code') AS code
 FROM base
 """
 
 FINDINGS = """
-SELECT ts, client_ip, method, path, category, code, body, oast_callback, s3_key
+SELECT ts, client_ip, method, path, category, code, body, s3_key
 FROM classified
-WHERE category IS NOT NULL
 ORDER BY ts
 """
 
@@ -75,7 +69,6 @@ FINDING_COLUMNS = [
     "category",
     "code",
     "body",
-    "oast_callback",
     "s3_key",
 ]
 
@@ -101,7 +94,7 @@ def has_def_time_callback(code):
 
 
 def classify(con):
-    con.execute(CLASSIFY, [OAST_RE])
+    con.execute(CLASSIFY)
 
 
 def run(con):
@@ -110,7 +103,6 @@ def run(con):
     for row in con.execute(FINDINGS).fetchall():
         finding = dict(zip(FINDING_COLUMNS, row))
         if finding["category"] == "cve_2025_3248" and not has_def_time_callback(finding["code"]):
-            continue
-        finding["code_callback"] = finding["category"] == "cve_2025_3248"
+            finding["category"] = None
         findings.append(finding)
     return findings

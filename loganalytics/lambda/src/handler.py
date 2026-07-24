@@ -16,7 +16,7 @@ SOURCE_PREFIX = "AWSLogs/227469555418/us-east-1/_aws_lambda_langflow/"
 FINDINGS_KEY = "findings.parquet"
 STATE_KEY = "state.json"
 
-GRAIN = ["client_ip", "path", "body", "category", "code_callback", "oast_callback"]
+GRAIN = ["client_ip", "method", "path", "body", "category"]
 
 
 def _missing(error):
@@ -56,22 +56,12 @@ def write_state(s3, now_hour, summary):
 
 def write_deduped(con, findings, existing_path, out_path):
     con.execute(
-        "CREATE OR REPLACE TEMP TABLE new_grain (client_ip VARCHAR, path VARCHAR, body VARCHAR, "
-        "category VARCHAR, code_callback BOOLEAN, oast_callback BOOLEAN)"
+        "CREATE OR REPLACE TEMP TABLE new_grain (client_ip VARCHAR, method VARCHAR, path VARCHAR, "
+        "body VARCHAR, category VARCHAR)"
     )
     con.executemany(
-        "INSERT INTO new_grain VALUES (?, ?, ?, ?, ?, ?)",
-        [
-            (
-                f["client_ip"],
-                f["path"],
-                f["body"],
-                f["category"],
-                bool(f["code_callback"]),
-                bool(f["oast_callback"]),
-            )
-            for f in findings
-        ],
+        "INSERT INTO new_grain VALUES (?, ?, ?, ?, ?)",
+        [(f["client_ip"], f["method"], f["path"], f["body"], f["category"]) for f in findings],
     )
     cols = ", ".join(GRAIN)
     source = f"SELECT {cols} FROM new_grain"
