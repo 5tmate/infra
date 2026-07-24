@@ -47,6 +47,36 @@ aws.iam.RolePolicy(
     ),
 )
 
+output_bucket = aws.s3.BucketV2("loganalytics-output", bucket="5tmate-loganalytics", tags=tags)
+
+aws.s3.BucketPublicAccessBlock(
+    "loganalytics-output-pab",
+    bucket=output_bucket.id,
+    block_public_acls=True,
+    block_public_policy=True,
+    ignore_public_acls=True,
+    restrict_public_buckets=True,
+)
+
+aws.iam.RolePolicy(
+    "loganalytics-s3-write",
+    role=role.name,
+    policy=output_bucket.arn.apply(
+        lambda arn: json.dumps(
+            {
+                "Version": "2012-10-17",
+                "Statement": [
+                    {
+                        "Effect": "Allow",
+                        "Action": "s3:PutObject",
+                        "Resource": f"{arn}/*",
+                    }
+                ],
+            }
+        )
+    ),
+)
+
 fn = aws.lambda_.Function(
     "loganalytics",
     runtime="python3.12",
@@ -55,6 +85,7 @@ fn = aws.lambda_.Function(
     code=pulumi.FileArchive("./lambda/build"),
     memory_size=512,
     timeout=120,
+    environment={"variables": {"OUTPUT_BUCKET": output_bucket.bucket}},
     tags=tags,
 )
 
@@ -81,3 +112,4 @@ aws.cloudwatch.EventTarget(
 
 pulumi.export("function_name", fn.name)
 pulumi.export("function_arn", fn.arn)
+pulumi.export("output_bucket", output_bucket.bucket)

@@ -10,6 +10,19 @@ import analysis
 import ingest
 
 BUCKET = "5tmate-langflow-logs"
+OUTPUT_BUCKET = os.environ.get("OUTPUT_BUCKET", "5tmate-loganalytics")
+
+RECORD_FIELDS = [
+    "ts",
+    "client_ip",
+    "method",
+    "path",
+    "category",
+    "code_callback",
+    "oast_callback",
+    "body",
+    "s3_key",
+]
 
 
 def select_keys(objects, now, scope):
@@ -20,15 +33,31 @@ def select_keys(objects, now, scope):
     return [key for key, modified in objects if start <= modified < end]
 
 
+def findings_key(now, scope):
+    if scope == "all":
+        return f"findings/all/{now:%Y%m%dT%H%M%SZ}.jsonl"
+    start = now.replace(minute=0, second=0, microsecond=0) - timedelta(hours=1)
+    return f"findings/{start:%Y/%m/%d/%H}.jsonl"
+
+
+def _record(finding):
+    record = {field: finding.get(field) for field in RECORD_FIELDS}
+    ts = record["ts"]
+    record["ts"] = ts.isoformat() if ts else None
+    record["oast_callback"] = bool(record["oast_callback"])
+    return record
+
+
 def handler(event, context):
     scope = (event or {}).get("scope", "hour")
+    now = datetime.now(timezone.utc)
     s3 = boto3.client("s3")
     objects = [
         (obj["Key"], obj["LastModified"])
         for page in s3.get_paginator("list_objects_v2").paginate(Bucket=BUCKET)
         for obj in page.get("Contents", [])
     ]
-    keys = select_keys(objects, datetime.now(timezone.utc), scope)
+    keys = select_keys(objects, now, scope)
 
     con = duckdb.connect()
     ingest.create_table(con)
@@ -44,6 +73,15 @@ def handler(event, context):
             os.remove(path)
 
     findings = analysis.run(con)
+    if findings:
+        body = "".join(json.dumps(_record(f)) + "\n" for f in findings)
+        s3.put_object(
+            Bucket=OUTPUT_BUCKET,
+            Key=findings_key(now, scope),
+            Body=body.encode("utf-8"),
+            ContentType="application/x-ndjson",
+        )
+
     summary = {
         "scope": scope,
         "objects": len(keys),

@@ -61,7 +61,7 @@ FROM base
 """
 
 FINDINGS = """
-SELECT ts, client_ip, method, path, category, code, oast_callback, s3_key
+SELECT ts, client_ip, method, path, category, code, body, oast_callback, s3_key
 FROM classified
 WHERE category IS NOT NULL
 ORDER BY ts
@@ -74,6 +74,7 @@ FINDING_COLUMNS = [
     "path",
     "category",
     "code",
+    "body",
     "oast_callback",
     "s3_key",
 ]
