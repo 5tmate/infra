@@ -1,3 +1,6 @@
+import ast
+import re
+
 CODE_INDICATORS = [
     r"socket",
     r"\.connect\(",
@@ -33,7 +36,7 @@ CODE_INDICATORS = [
     r"\beval\b",
     r"__import__",
 ]
-CODE_RE = "|".join(CODE_INDICATORS)
+CALLBACK_PATTERN = re.compile("|".join(CODE_INDICATORS), re.IGNORECASE)
 
 OAST_RE = (
     r"[a-z0-9.-]+\.(interactsh\.com|oast\.(fun|site|pro|live|me)|oastify\.com|canarytokens\.com)"
@@ -54,11 +57,7 @@ SELECT
         WHEN method = 'GET' AND path IN ('/', '/api/v1/version') THEN 'langflow_detect'
         ELSE 'other_probe'
     END AS category,
-    (
-        method = 'POST'
-        AND path = '/api/v1/validate/code'
-        AND regexp_matches(coalesce(json_extract_string(sb, '$.code'), ''), ?, 'i')
-    ) AS code_callback,
+    json_extract_string(sb, '$.code') AS code,
     CASE
         WHEN NOT (method = 'POST' AND path LIKE '/api/v1/build_public_tmp/%/flow') THEN NULL
         WHEN json_type(sb, '$.data') IS NULL THEN 'normal'
@@ -72,7 +71,7 @@ FROM base
 """
 
 FINDINGS = """
-SELECT ts, client_ip, method, path, category, code_callback, build_verdict, oast_callback, s3_key
+SELECT ts, client_ip, method, path, category, code, build_verdict, oast_callback, s3_key
 FROM classified
 WHERE category = 'cve_2025_3248'
     OR (category = 'cve_2026_33017' AND build_verdict <> 'normal')
@@ -87,17 +86,42 @@ FINDING_COLUMNS = [
     "method",
     "path",
     "category",
-    "code_callback",
+    "code",
     "build_verdict",
     "oast_callback",
     "s3_key",
 ]
 
 
+def _def_time_exprs(tree):
+    """Yield the expressions Python evaluates when a `def` is exec'd: decorators
+    and argument defaults. The function body is not among them."""
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            yield from node.decorator_list
+            args = node.args
+            yield from (d for d in args.defaults + args.kw_defaults if d is not None)
+
+
+def has_def_time_callback(code):
+    if not code:
+        return False
+    try:
+        tree = ast.parse(code)
+    except (SyntaxError, ValueError):
+        return False
+    return any(CALLBACK_PATTERN.search(ast.unparse(expr)) for expr in _def_time_exprs(tree))
+
+
 def classify(con):
-    con.execute(CLASSIFY, [CODE_RE, OAST_RE])
+    con.execute(CLASSIFY, [OAST_RE])
 
 
 def run(con):
     classify(con)
-    return [dict(zip(FINDING_COLUMNS, row)) for row in con.execute(FINDINGS).fetchall()]
+    findings = [dict(zip(FINDING_COLUMNS, row)) for row in con.execute(FINDINGS).fetchall()]
+    for finding in findings:
+        finding["code_callback"] = finding["category"] == "cve_2025_3248" and has_def_time_callback(
+            finding["code"]
+        )
+    return findings
