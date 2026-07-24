@@ -1,2 +1,103 @@
+CODE_INDICATORS = [
+    r"socket",
+    r"\.connect\(",
+    r"create_connection",
+    r"TCPClient",
+    r"requests\.get",
+    r"requests\.post",
+    r"urlopen",
+    r"http\.client",
+    r"subprocess",
+    r"Popen",
+    r"os\.system",
+    r"os\.popen",
+    r"\bcurl\b",
+    r"\bwget\b",
+    r"Invoke-WebRequest",
+    r"DownloadString",
+    r"bash\s+-i",
+    r"sh\s+-i",
+    r"/dev/tcp/",
+    r"\bnc\b",
+    r"\bncat\b",
+    r"\bsocat\b",
+    r"powershell",
+    r"Invoke-Expression",
+    r"\bIEX\b",
+    r"Net\.Sockets\.TCPClient",
+    r"https?://",
+    r"\d{1,3}(?:\.\d{1,3}){3}:\d+",
+    r"base64",
+    r"b64decode",
+    r"\bexec\b",
+    r"\beval\b",
+    r"__import__",
+]
+CODE_RE = "|".join(CODE_INDICATORS)
+
+OAST_RE = (
+    r"[a-z0-9.-]+\.(interactsh\.com|oast\.(fun|site|pro|live|me)|oastify\.com|canarytokens\.com)"
+)
+
+CLASSIFY = """
+CREATE OR REPLACE TEMP TABLE classified AS
+WITH base AS (
+    SELECT *, CASE WHEN json_valid(body) THEN body ELSE '{}' END AS sb
+    FROM requests
+)
+SELECT
+    * EXCLUDE (sb),
+    CASE
+        WHEN method = 'POST' AND path = '/api/v1/validate/code' THEN 'cve_2025_3248'
+        WHEN method = 'POST' AND path LIKE '/api/v1/build_public_tmp/%/flow' THEN 'cve_2026_33017'
+        WHEN method = 'POST' AND path = '/api/v1/login' THEN 'login_probe'
+        WHEN method = 'GET' AND path IN ('/', '/api/v1/version') THEN 'langflow_detect'
+        ELSE 'other_probe'
+    END AS category,
+    (
+        method = 'POST'
+        AND path = '/api/v1/validate/code'
+        AND regexp_matches(coalesce(json_extract_string(sb, '$.code'), ''), ?, 'i')
+    ) AS code_callback,
+    CASE
+        WHEN NOT (method = 'POST' AND path LIKE '/api/v1/build_public_tmp/%/flow') THEN NULL
+        WHEN json_type(sb, '$.data') IS NULL THEN 'normal'
+        WHEN json_type(sb, '$.data') = 'NULL' THEN 'data_null'
+        WHEN coalesce(json_array_length(sb, '$.data.nodes'), 0) > 0 THEN 'exploit'
+        WHEN json_type(sb, '$.data') = 'OBJECT' THEN 'data_empty'
+        ELSE 'other'
+    END AS build_verdict,
+    regexp_matches(coalesce(body, ''), ?, 'i') AS oast_callback
+FROM base
+"""
+
+FINDINGS = """
+SELECT ts, client_ip, method, path, category, code_callback, build_verdict, oast_callback, s3_key
+FROM classified
+WHERE category = 'cve_2025_3248'
+    OR (category = 'cve_2026_33017' AND build_verdict <> 'normal')
+    OR category = 'login_probe'
+    OR category = 'other_probe'
+ORDER BY ts
+"""
+
+FINDING_COLUMNS = [
+    "ts",
+    "client_ip",
+    "method",
+    "path",
+    "category",
+    "code_callback",
+    "build_verdict",
+    "oast_callback",
+    "s3_key",
+]
+
+
+def classify(con):
+    con.execute(CLASSIFY, [CODE_RE, OAST_RE])
+
+
 def run(con):
-    return []
+    classify(con)
+    return [dict(zip(FINDING_COLUMNS, row)) for row in con.execute(FINDINGS).fetchall()]
