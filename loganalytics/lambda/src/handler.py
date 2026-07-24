@@ -23,12 +23,11 @@ def _missing(error):
     return error.response.get("Error", {}).get("Code") in ("NoSuchKey", "404")
 
 
-def scan_prefixes(now_hour, scope, watermark):
-    if watermark is None and scope == "all":
+def scan_prefixes(now_hour, watermark):
+    if watermark is None:
         return [SOURCE_PREFIX]
-    start = watermark if watermark is not None else now_hour - timedelta(hours=24)
     prefixes = []
-    hour = start
+    hour = watermark
     while hour < now_hour:
         prefixes.append(SOURCE_PREFIX + hour.strftime("%Y/%m/%d/%H/"))
         hour += timedelta(hours=1)
@@ -83,7 +82,6 @@ def write_deduped(con, findings, existing_path, out_path):
 
 
 def handler(event, context):
-    scope = (event or {}).get("scope", "hour")
     now = datetime.now(timezone.utc)
     now_hour = now.replace(minute=0, second=0, microsecond=0)
     s3 = boto3.client("s3")
@@ -91,7 +89,7 @@ def handler(event, context):
     watermark = read_watermark(s3)
     keys = [
         obj["Key"]
-        for prefix in scan_prefixes(now_hour, scope, watermark)
+        for prefix in scan_prefixes(now_hour, watermark)
         for page in s3.get_paginator("list_objects_v2").paginate(Bucket=BUCKET, Prefix=prefix)
         for obj in page.get("Contents", [])
         if obj["Key"].endswith(".zst")
@@ -135,7 +133,7 @@ def handler(event, context):
         },
     )
     summary = {
-        "scope": scope,
+        "first_run": watermark is None,
         "watermark": watermark.isoformat() if watermark else None,
         "objects": len(keys),
         "records": records,

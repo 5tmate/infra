@@ -85,7 +85,7 @@ fn = aws.lambda_.Function(
     role=role.arn,
     code=pulumi.FileArchive("./lambda/build"),
     memory_size=512,
-    timeout=120,
+    timeout=300,
     environment={"variables": {"OUTPUT_BUCKET": output_bucket.bucket}},
     tags=tags,
 )
