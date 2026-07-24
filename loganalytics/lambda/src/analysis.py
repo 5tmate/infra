@@ -105,9 +105,11 @@ def classify(con):
 
 def run(con):
     classify(con)
-    findings = [dict(zip(FINDING_COLUMNS, row)) for row in con.execute(FINDINGS).fetchall()]
-    for finding in findings:
-        finding["code_callback"] = finding["category"] == "cve_2025_3248" and has_def_time_callback(
-            finding["code"]
-        )
+    findings = []
+    for row in con.execute(FINDINGS).fetchall():
+        finding = dict(zip(FINDING_COLUMNS, row))
+        if finding["category"] == "cve_2025_3248" and not has_def_time_callback(finding["code"]):
+            continue
+        finding["code_callback"] = finding["category"] == "cve_2025_3248"
+        findings.append(finding)
     return findings
