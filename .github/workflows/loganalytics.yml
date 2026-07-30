@@ -1,0 +1,44 @@
+name: Log Analytics
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'loganalytics/**'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'loganalytics/**'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: astral-sh/setup-uv@v5
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN_LOGANALYTICS }}
+          aws-region: ap-northeast-1
+
+      - name: Login and get passphrase
+        run: bash scripts/get-passphrase.sh loganalytics
+
+      - name: Build Lambda bundle
+        run: bash loganalytics/lambda/build.sh
+
+      - uses: pulumi/actions@v6
+        with:
+          command: ${{ github.event_name == 'pull_request' && 'preview' || 'up' }}
+          stack-name: prod
+          work-dir: loganalytics
