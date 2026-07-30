@@ -83,6 +83,21 @@ aws.iam.RolePolicy(
     ),
 )
 
+alerts_topic = aws.sns.Topic("loganalytics-alerts", name="5tmate-loganalytics-alerts", tags=tags)
+
+aws.iam.RolePolicy(
+    "loganalytics-sns-publish",
+    role=role.name,
+    policy=alerts_topic.arn.apply(
+        lambda arn: json.dumps(
+            {
+                "Version": "2012-10-17",
+                "Statement": [{"Effect": "Allow", "Action": "sns:Publish", "Resource": arn}],
+            }
+        )
+    ),
+)
+
 fn = aws.lambda_.Function(
     "loganalytics",
     runtime="python3.12",
@@ -91,7 +106,9 @@ fn = aws.lambda_.Function(
     code=pulumi.FileArchive("./lambda/build"),
     memory_size=512,
     timeout=300,
-    environment={"variables": {"OUTPUT_BUCKET": output_bucket.bucket}},
+    environment={
+        "variables": {"OUTPUT_BUCKET": output_bucket.bucket, "TOPIC_ARN": alerts_topic.arn}
+    },
     tags=tags,
 )
 
@@ -119,3 +136,4 @@ aws.cloudwatch.EventTarget(
 pulumi.export("function_name", fn.name)
 pulumi.export("function_arn", fn.arn)
 pulumi.export("output_bucket", output_bucket.bucket)
+pulumi.export("topic_arn", alerts_topic.arn)

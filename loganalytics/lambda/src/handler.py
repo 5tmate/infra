@@ -12,9 +12,12 @@ import ingest
 
 BUCKET = "5tmate-langflow-logs"
 OUTPUT_BUCKET = os.environ.get("OUTPUT_BUCKET", "5tmate-loganalytics")
+TOPIC_ARN = os.environ.get("TOPIC_ARN")
 SOURCE_PREFIX = "AWSLogs/227469555418/us-east-1/_aws_lambda_langflow/"
 FINDINGS_KEY = "findings.parquet"
 STATE_KEY = "state.json"
+
+ALERT_MAX = 100
 
 GRAIN = ["client_ip", "method", "path", "body", "category"]
 
@@ -71,6 +74,47 @@ def write_deduped(con, findings, existing_path, out_path):
     return con.execute(f"SELECT count(*) FROM read_parquet('{out_path}')").fetchone()[0]
 
 
+def _alert_body(cve, window_start, window_end):
+    lines = [
+        f"- {f['category']}  {f['client_ip']}  {f['method']} {f['path']}\n"
+        f"    {(f['body'] or '')[:200]}"
+        for f in cve[:ALERT_MAX]
+    ]
+    if len(cve) > ALERT_MAX:
+        lines.append(f"... and {len(cve) - ALERT_MAX} more")
+    header = (
+        f"{len(cve)} CVE attack request(s) in "
+        f"[{window_start.isoformat()}, {window_end.isoformat()})"
+    )
+    return header + "\n\n" + "\n".join(lines)
+
+
+def alert_on_cve(watermark, findings, now_hour):
+
+    if watermark is None or not TOPIC_ARN:
+        return 0
+    seen, cve = set(), []
+    for f in findings:
+        if not f["category"]:
+            continue
+        key = tuple(f[c] for c in GRAIN)
+        if key not in seen:
+            seen.add(key)
+            cve.append(f)
+    if not cve:
+        return 0
+    try:
+        boto3.client("sns").publish(
+            TopicArn=TOPIC_ARN,
+            Subject=f"[5tmate] {len(cve)} CVE attack(s) detected"[:100],
+            Message=_alert_body(cve, watermark, now_hour),
+        )
+    except Exception as error:
+        print(json.dumps({"alert_error": str(error)}))
+        return 0
+    return len(cve)
+
+
 def handler(event, context):
     now = datetime.now(timezone.utc)
     now_hour = now.replace(minute=0, second=0, microsecond=0)
@@ -122,6 +166,8 @@ def handler(event, context):
             "total_findings": total,
         },
     )
+    alerted = alert_on_cve(watermark, findings, now_hour)
+
     summary = {
         "first_run": watermark is None,
         "watermark": watermark.isoformat() if watermark else None,
@@ -131,6 +177,7 @@ def handler(event, context):
         "skipped": skipped,
         "new_findings": len(findings),
         "total_findings": total,
+        "cve_alerted": alerted,
     }
     print(json.dumps(summary))
     return summary
