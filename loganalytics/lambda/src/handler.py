@@ -60,17 +60,24 @@ def write_state(s3, now_hour, summary):
 def write_deduped(con, findings, existing_path, out_path):
     con.execute(
         "CREATE OR REPLACE TEMP TABLE new_grain (client_ip VARCHAR, method VARCHAR, path VARCHAR, "
-        "body VARCHAR, category VARCHAR)"
+        "body VARCHAR, category VARCHAR, last_seen TIMESTAMP)"
     )
     con.executemany(
-        "INSERT INTO new_grain VALUES (?, ?, ?, ?, ?)",
-        [(f["client_ip"], f["method"], f["path"], f["body"], f["category"]) for f in findings],
+        "INSERT INTO new_grain VALUES (?, ?, ?, ?, ?, ?)",
+        [
+            (f["client_ip"], f["method"], f["path"], f["body"], f["category"], f["ts"])
+            for f in findings
+        ],
     )
     cols = ", ".join(GRAIN)
-    source = f"SELECT {cols} FROM new_grain"
+    seen_cols = f"{cols}, last_seen"
+    source = f"SELECT {seen_cols} FROM new_grain"
     if existing_path:
-        source = f"SELECT {cols} FROM read_parquet('{existing_path}') UNION ALL {source}"
-    con.execute(f"COPY (SELECT DISTINCT {cols} FROM ({source})) TO '{out_path}' (FORMAT parquet)")
+        source = f"SELECT {seen_cols} FROM read_parquet('{existing_path}') UNION ALL {source}"
+    con.execute(
+        f"COPY (SELECT {cols}, max(last_seen) AS last_seen "
+        f"FROM ({source}) GROUP BY {cols}) TO '{out_path}' (FORMAT parquet)"
+    )
     return con.execute(f"SELECT count(*) FROM read_parquet('{out_path}')").fetchone()[0]
 
 
