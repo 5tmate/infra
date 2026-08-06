@@ -1,4 +1,4 @@
-name: IMDSv2 policy
+name: IMDSv2 check
 
 on:
   push: {}
@@ -58,12 +58,15 @@ jobs:
         run: |
           set +e
           unset GITHUB_ENV
+          # --cwd moves Pulumi into the stack directory, so the policy pack
+          # path has to be absolute or it resolves to <stack>/policy/imdsv2.
+          pack="$PWD/policy/imdsv2"
           failed=""
           for stack in $(find . -mindepth 2 -maxdepth 2 -name Pulumi.yaml -printf '%h\n' | sed 's|^\./||' | sort); do
             echo "::group::$stack"
             source scripts/get-passphrase.sh "$stack" \
               && pulumi preview --cwd "$stack" --stack prod \
-                   --policy-pack policy/imdsv2 --non-interactive
+                   --policy-pack "$pack" --non-interactive
             [ $? -eq 0 ] || failed="$failed $stack"
             echo "::endgroup::"
           done
