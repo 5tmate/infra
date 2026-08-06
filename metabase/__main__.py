@@ -162,6 +162,10 @@ instance = aws.ec2.Instance(
     iam_instance_profile=instance_profile.name,
     key_name=key_pair.key_name,
     associate_public_ip_address=True,
+    metadata_options={
+        "http_endpoint": "enabled",
+        "http_tokens": "required",
+    },
     user_data=user_data,
     user_data_replace_on_change=True,
     tags={**tags, "Name": "5tmate-metabase-honeypot"},
