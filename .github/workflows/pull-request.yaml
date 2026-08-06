@@ -1,0 +1,70 @@
+name: IMDSv2 policy
+
+on:
+  push: {}
+  pull_request:
+    branches: [main]
+  workflow_dispatch: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  policy-tests:
+    name: OPA policy tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: open-policy-agent/setup-opa@v2
+
+      - run: opa fmt --fail --diff policy/imdsv2
+
+      - run: opa check policy/imdsv2
+
+      # --fail-on-empty: without it a pack whose tests were deleted exits 0.
+      - run: opa test policy/imdsv2 --fail-on-empty -v
+
+  pulumi-preview:
+    name: IMDSv2 policy preview
+    needs: policy-tests
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: astral-sh/setup-uv@v5
+
+      - uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN_POLICY }}
+          aws-region: ap-northeast-1
+
+      - name: Install Pulumi
+        run: |
+          curl -fsSL https://get.pulumi.com | sh
+          echo "$HOME/.pulumi/bin" >> "$GITHUB_PATH"
+
+      # get-passphrase.sh is sourced, not run: it writes to $GITHUB_ENV when
+      # that is set, and $GITHUB_ENV only applies to the next step.
+      - name: Preview every stack against the policy pack
+        run: |
+          set +e
+          unset GITHUB_ENV
+          failed=""
+          for stack in $(find . -mindepth 2 -maxdepth 2 -name Pulumi.yaml -printf '%h\n' | sed 's|^\./||' | sort); do
+            echo "::group::$stack"
+            source scripts/get-passphrase.sh "$stack" \
+              && pulumi preview --cwd "$stack" --stack prod \
+                   --policy-pack policy/imdsv2 --non-interactive
+            [ $? -eq 0 ] || failed="$failed $stack"
+            echo "::endgroup::"
+          done
+          [ -z "$failed" ] || { echo "Policy check failed for:$failed"; exit 1; }

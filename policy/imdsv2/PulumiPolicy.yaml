@@ -1,0 +1,2 @@
+description: EC2 instances must enforce IMDSv2 (metadata_options.http_tokens = "required")
+runtime: opa
