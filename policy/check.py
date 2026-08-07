@@ -101,13 +101,19 @@ def extract(stack_dir):
 
 
 def extract_via_subprocess(stack_dir):
-    interpreter = stack_dir / ".venv" / "bin" / "python"
-    if not interpreter.exists():
-        raise GateError(f"{stack_dir.name}: no .venv; run `make sync`")
     reason = "unknown"
     for _ in range(2):
         result = subprocess.run(
-            [str(interpreter), str(SELF), "--extract", str(stack_dir)],
+            [
+                "uv",
+                "run",
+                "--directory",
+                str(stack_dir),
+                "python",
+                str(SELF),
+                "--extract",
+                str(stack_dir),
+            ],
             capture_output=True,
             text=True,
             cwd=REPO,
