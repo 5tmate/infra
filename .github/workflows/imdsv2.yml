@@ -1,0 +1,127 @@
+name: IMDSv2
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_call:
+
+env:
+  PULUMI_VERSION: 3.246.0
+  OPA_VERSION: v1.19.0
+  MINISTACK_ENDPOINT: http://127.0.0.1:4566
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      targets: ${{ steps.scan.outputs.targets }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: scan
+        name: Enumerate every tracked Pulumi project and stack config
+        run: |
+          targets=$(git ls-files | grep -E '/Pulumi\.[^/]+\.yaml$' | while read -r file; do
+            directory=${file%/*}
+            stack=${file##*/Pulumi.}
+            stack=${stack%.yaml}
+            [ -f "$directory/Pulumi.yaml" ] && printf '{"dir":"%s","stack":"%s"}\n' "$directory" "$stack"
+          done | jq -sc .)
+          echo "targets=$targets" >> "$GITHUB_OUTPUT"
+          echo "$targets"
+
+  gate:
+    needs: discover
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.discover.outputs.targets) }}
+
+    services:
+      ministack:
+        image: ministackorg/ministack:1.4.16
+        ports:
+          - 4566:4566
+
+    env:
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_ENDPOINT_URL: http://127.0.0.1:4566
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Install Pulumi CLI and OPA
+        run: |
+          curl -fsSL https://get.pulumi.com | sh -s -- --version "$PULUMI_VERSION"
+          echo "$HOME/.pulumi/bin" >> "$GITHUB_PATH"
+          curl -fsSL -o "$RUNNER_TEMP/opa" \
+            "https://openpolicyagent.org/downloads/$OPA_VERSION/opa_linux_amd64_static"
+          chmod +x "$RUNNER_TEMP/opa"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+
+      - name: Rego unit tests
+        run: opa test imdsv2 --fail-on-empty
+
+      - name: Wait for MiniStack
+        run: |
+          for _ in $(seq 1 60); do
+            if curl -fsS "$MINISTACK_ENDPOINT" >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "MiniStack never became ready at $MINISTACK_ENDPOINT" >&2
+          exit 1
+
+      - name: Seed the lookups every stack performs
+        run: |
+          aws --region us-east-1 route53 create-hosted-zone \
+            --name threatreveal.org --caller-reference imdsv2-gate >/dev/null
+
+          regions=$(git ls-files '*/Pulumi.*.yaml' | xargs grep -h '^ *aws:region:' | awk '{print $2}' | sort -u)
+          for region in $regions; do
+            aws --region "$region" ssm put-parameter --overwrite --type String \
+              --name /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64 \
+              --value ami-00000000000000000 >/dev/null
+          done
+
+      - name: Drop the production encryption salt
+        working-directory: ${{ matrix.target.dir }}
+        run: |
+          config="Pulumi.${{ matrix.target.stack }}.yaml"
+          if grep -q 'secure:' "$config"; then
+            echo "imdsv2 gate: $config encrypts a value; the gate cannot read it" >&2
+            exit 2
+          fi
+          sed -i '/^encryptionsalt:/d' "$config"
+
+      - name: Preview against MiniStack
+        working-directory: ${{ matrix.target.dir }}
+        env:
+          PULUMI_CONFIG_PASSPHRASE: imdsv2-gate-throwaway
+        run: |
+          pulumi login "file://$RUNNER_TEMP"
+          pulumi stack init "${{ matrix.target.stack }}"
+          for setting in skipCredentialsValidation skipRequestingAccountId \
+                         skipMetadataApiCheck skipRegionValidation; do
+            pulumi config set "aws:$setting" true --stack "${{ matrix.target.stack }}"
+          done
+          if ! pulumi preview --stack "${{ matrix.target.stack }}" --json > "$RUNNER_TEMP/preview.json"; then
+            echo "pulumi preview failed; --json puts diagnostics in the document, not on stderr:" >&2
+            jq -r '.diagnostics[]?.message // empty' "$RUNNER_TEMP/preview.json" >&2 \
+              || cat "$RUNNER_TEMP/preview.json" >&2
+            exit 1
+          fi
+
+      - name: Evaluate IMDSv2 policy
+        run: |
+          python3 imdsv2/check.py "$RUNNER_TEMP/preview.json" \
+            --label "${{ matrix.target.dir }}/${{ matrix.target.stack }}"
