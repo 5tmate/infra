@@ -109,7 +109,16 @@ jobs:
         run: |
           pulumi login "file://$RUNNER_TEMP"
           pulumi stack init "${{ matrix.target.stack }}"
-          pulumi preview --stack "${{ matrix.target.stack }}" --json > "$RUNNER_TEMP/preview.json"
+          for setting in skipCredentialsValidation skipRequestingAccountId \
+                         skipMetadataApiCheck skipRegionValidation; do
+            pulumi config set "aws:$setting" true --stack "${{ matrix.target.stack }}"
+          done
+          if ! pulumi preview --stack "${{ matrix.target.stack }}" --json > "$RUNNER_TEMP/preview.json"; then
+            echo "pulumi preview failed; --json puts diagnostics in the document, not on stderr:" >&2
+            jq -r '.diagnostics[]?.message // empty' "$RUNNER_TEMP/preview.json" >&2 \
+              || cat "$RUNNER_TEMP/preview.json" >&2
+            exit 1
+          fi
 
       - name: Evaluate IMDSv2 policy
         run: |
