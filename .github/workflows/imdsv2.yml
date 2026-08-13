@@ -83,10 +83,11 @@ jobs:
 
       - name: Seed the lookups every stack performs
         run: |
+          aws --region us-east-1 route53 create-hosted-zone \
+            --name threatreveal.org --caller-reference imdsv2-gate >/dev/null
+
           regions=$(git ls-files '*/Pulumi.*.yaml' | xargs grep -h '^ *aws:region:' | awk '{print $2}' | sort -u)
           for region in $regions; do
-            aws --region "$region" route53 create-hosted-zone \
-              --name threatreveal.org --caller-reference "imdsv2-gate-$region" >/dev/null
             aws --region "$region" ssm put-parameter --overwrite --type String \
               --name /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64 \
               --value ami-00000000000000000 >/dev/null
