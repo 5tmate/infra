@@ -5,22 +5,6 @@
 - [Pulumi CLI](https://www.pulumi.com/docs/install/) v3+
 - [uv](https://docs.astral.sh/uv/getting-started/installation/)
 - AWS CLI v2 with access to the target account
-- [pre-commit](https://pre-commit.com/)
-- [OPA](https://www.openpolicyagent.org/docs/latest/#running-opa)
-
-## Hooks
-
-```bash
-pre-commit install
-```
-
-This installs the IMDSv2 gate. It runs every Pulumi program under mock providers
-and rejects a commit that declares an EC2 instance, launch template, or spot
-instance request without `metadata_options={"http_tokens": "required"}`. It needs
-no AWS credentials.
-
-It is the only thing enforcing IMDSv2 — a clone that skips this step is
-unprotected, and `git commit --no-verify` bypasses it.
 
 ## AWS Profile Setup
 
