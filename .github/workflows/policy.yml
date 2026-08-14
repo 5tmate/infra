@@ -84,7 +84,7 @@ jobs:
       - name: Seed the lookups every stack performs
         run: |
           aws --region us-east-1 route53 create-hosted-zone \
-            --name threatreveal.org --caller-reference imdsv2-gate >/dev/null
+            --name threatreveal.org --caller-reference policy-gate >/dev/null
 
           regions=$(git ls-files '*/Pulumi.*.yaml' | xargs grep -h '^ *aws:region:' | awk '{print $2}' | sort -u)
           for region in $regions; do
@@ -98,7 +98,7 @@ jobs:
         run: |
           config="Pulumi.${{ matrix.target.stack }}.yaml"
           if grep -q 'secure:' "$config"; then
-            echo "imdsv2 gate: $config encrypts a value; the gate cannot read it" >&2
+            echo "policy gate: $config encrypts a value; the gate cannot read it" >&2
             exit 2
           fi
           sed -i '/^encryptionsalt:/d' "$config"
@@ -106,7 +106,7 @@ jobs:
       - name: Preview against MiniStack
         working-directory: ${{ matrix.target.dir }}
         env:
-          PULUMI_CONFIG_PASSPHRASE: imdsv2-gate-throwaway
+          PULUMI_CONFIG_PASSPHRASE: policy-gate-throwaway
         run: |
           pulumi login "file://$RUNNER_TEMP"
           pulumi stack init "${{ matrix.target.stack }}"
@@ -121,7 +121,7 @@ jobs:
             exit 1
           fi
 
-      - name: Evaluate IMDSv2 policy
+      - name: Evaluate the policy rules
         run: |
           python3 policy/check.py "$RUNNER_TEMP/preview.json" \
             --label "${{ matrix.target.dir }}/${{ matrix.target.stack }}"
