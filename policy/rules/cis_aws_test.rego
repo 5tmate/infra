@@ -103,6 +103,36 @@ test_filter_missing_a_keyword_does_not_satisfy_its_control if {
 	])
 }
 
+# support_role
+test_support_named_role_without_the_policy_is_denied if {
+	denials("support_role") == 1 with input as document([resource("aws:iam/role:Role", "support-role", {"name": "support-role-abc"})])
+}
+
+test_support_named_role_with_the_policy_is_allowed if {
+	denials("support_role") == 0 with input as document([
+		resource("aws:iam/role:Role", "support-role", {"name": "support-role-abc"}),
+		resource("aws:iam/rolePolicyAttachment:RolePolicyAttachment", "attach", {
+			"policyArn": "arn:aws:iam::aws:policy/AWSSupportAccess",
+			"role": "support-role-abc",
+		}),
+	])
+}
+
+test_role_not_named_for_support_is_not_applicable if {
+	checked("support_role") == 0 with input as document([resource("aws:iam/role:Role", "ssm-role", {"name": "ssm-role-abc"})])
+	denials("support_role") == 0 with input as document([resource("aws:iam/role:Role", "ssm-role", {"name": "ssm-role-abc"})])
+}
+
+test_attachment_pointing_at_another_role_does_not_count if {
+	denials("support_role") == 1 with input as document([
+		resource("aws:iam/role:Role", "support-role", {"name": "support-role-abc"}),
+		resource("aws:iam/rolePolicyAttachment:RolePolicyAttachment", "attach", {
+			"policyArn": "arn:aws:iam::aws:policy/AWSSupportAccess",
+			"role": "some-other-role",
+		}),
+	])
+}
+
 # 5.1
 test_nacl_allowing_ssh_from_the_world_is_denied if {
 	denials("nacl_admin_ports") == 1 with input as document([resource(NETWORK_ACL, "nacl", {"ingress": [{

@@ -4,13 +4,35 @@ import rego.v1
 
 title := "CIS AWS Foundations — the controls a Pulumi preview can answer"
 
-# Only these fail the build. The rest are written and reported, but not gating,
-# mirroring the upstream file where they were defined and never wired in.
+# Every control gates except the two named below. Each rule already refuses to
+# judge a stack that declares none of the resources it watches, so an enabled
+# rule with nothing to look at simply reports n/a rather than a false violation.
+
 #
-# cloudtrail_multi_region is off because this account does not run CloudTrail.
-# Nothing declares a trail, so it reports n/a either way; turn it back on if a
-# trail is ever added and should be held to multi-region logging.
-enforced := {"s3_access_logging", "alarm_unauthorized_api", "nacl_admin_ports"}
+# root_account_keys has no rule at all. AWS does not expose root access keys to
+# any API, so a preview can never carry the fact this control needs.
+enforced := {
+	"alarm_cloudtrail_changes",
+	"alarm_cmk_deletion",
+	"alarm_config_changes",
+	"alarm_console_auth_failures",
+	"alarm_console_without_mfa",
+	"alarm_gateway_changes",
+	"alarm_iam_policy_changes",
+	"alarm_nacl_changes",
+	"alarm_organizations_changes",
+	"alarm_root_usage",
+	"alarm_route_table_changes",
+	"alarm_s3_policy_changes",
+	"alarm_security_group_changes",
+	"alarm_unauthorized_api",
+	"alarm_vpc_changes",
+	"cloudtrail_multi_region",
+	"nacl_admin_ports",
+	"s3_access_logging",
+	"support_role",
+	"sg_admin_ports",
+}
 
 titles := {
 	"s3_access_logging": "S3 buckets must have server access logging enabled",
@@ -96,7 +118,6 @@ WATCHED := {
 	"alarm_route_table_changes": {METRIC_FILTER},
 	"alarm_vpc_changes": {METRIC_FILTER},
 	"alarm_organizations_changes": {METRIC_FILTER},
-	"support_role": {ROLE},
 	"nacl_admin_ports": {NETWORK_ACL},
 	"sg_admin_ports": {SECURITY_GROUP},
 }
@@ -105,6 +126,11 @@ applicable contains entry if {
 	resource := input.resources[_]
 	resource.type in WATCHED[control]
 	entry := {"control": control, "resource": name(resource)}
+}
+
+applicable contains entry if {
+	role := support_named_roles[_]
+	entry := {"control": "support_role", "resource": name(role)}
 }
 
 # s3_access_logging — S3 server access logging
@@ -172,26 +198,23 @@ watched_by_alarm(keywords) if {
 	alarmed(metric_name(filter))
 }
 
-# support_role — only judged when this stack declares an IAM role
+# support_role — only judged for roles this stack names for support
 deny contains entry if {
-	role_declared
-	not support_role_present
-	entry := finding(
-		"support_role",
-		"no IAM role whose name contains 'support' has AWSSupportAccess attached in this stack",
-	)
+	role := support_named_roles[_]
+	not has_support_access(object.get(role, "name", ""))
+	entry := finding("support_role", sprintf(
+		"IAM role '%s' is named for support but nothing attaches AWSSupportAccess to it in this stack",
+		[name(role)],
+	))
 }
 
-role_declared if {
-	resource := input.resources[_]
-	resource.type == ROLE
-}
-
-support_role_present if {
+support_named_roles contains role if {
 	role := input.resources[_]
 	role.type == ROLE
-	role_name := object.get(role, "name", "")
-	contains(lower(role_name), "support")
+	contains(lower(object.get(role, "name", "")), "support")
+}
+
+has_support_access(role_name) if {
 	attachment := input.resources[_]
 	attachment.type == ROLE_ATTACHMENT
 	object.get(attachment, "policyArn", "") == SUPPORT_POLICY
