@@ -1,4 +1,4 @@
-STACKS = dns landing
+STACKS = dns landing metabase
 
 .PHONY: fmt lint check sync
 

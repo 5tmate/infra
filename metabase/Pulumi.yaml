@@ -1,0 +1,7 @@
+name: 5tmate-metabase
+runtime:
+  name: python
+  options:
+    toolchain: uv
+    virtualenv: .venv
+description: Metabase RCE honeypot EC2
