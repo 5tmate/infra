@@ -1,4 +1,4 @@
-name: IMDSv2
+name: Policy
 
 on:
   pull_request:
@@ -68,7 +68,7 @@ jobs:
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
 
       - name: Rego unit tests
-        run: opa test imdsv2 --fail-on-empty
+        run: opa test policy/rules --fail-on-empty
 
       - name: Wait for MiniStack
         run: |
@@ -123,5 +123,5 @@ jobs:
 
       - name: Evaluate IMDSv2 policy
         run: |
-          python3 imdsv2/check.py "$RUNNER_TEMP/preview.json" \
+          python3 policy/check.py "$RUNNER_TEMP/preview.json" \
             --label "${{ matrix.target.dir }}/${{ matrix.target.stack }}"

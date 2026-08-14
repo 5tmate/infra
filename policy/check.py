@@ -1,4 +1,8 @@
-"""Fail if a Pulumi preview declares an EC2 resource that does not enforce IMDSv2.
+"""Evaluate every rule package against a Pulumi preview.
+
+Each package declares `titles` (control id to description) and emits `applicable`
+and `deny` entries tagged with the control they belong to, so a clean run can
+distinguish "checked and compliant" from "nothing here to check".
 
 Exit codes: 0 pass, 1 policy violation, 2 the gate itself could not run.
 """
@@ -10,8 +14,7 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-POLICY = REPO / "imdsv2"
-QUERY = "data.imdsv2.deny_imdsv2_required with input as input.resources[_]"
+RULES = REPO / "policy" / "rules"
 
 UNKNOWN = "04da6b54-80e4-46f7-96ec-b56ff0331ba9"
 MANAGED_TYPES = {
@@ -59,8 +62,16 @@ def reject_unknowns(label, resources):
 
 
 def evaluate(resources):
+    rule_files = sorted(p for p in RULES.glob("*.rego") if not p.name.endswith("_test.rego"))
+    if not rule_files:
+        raise GateError(f"no rule packages found in {RULES}")
+    command = ["opa", "eval"]
+    for path in rule_files:
+        command += ["-d", str(path)]
+    command += ["-I", "-f", "json", "data"]
+
     result = subprocess.run(
-        ["opa", "eval", "-d", str(POLICY), "-I", "-f", "json", QUERY],
+        command,
         input=json.dumps({"resources": resources}),
         capture_output=True,
         text=True,
@@ -68,13 +79,32 @@ def evaluate(resources):
     )
     if result.returncode != 0:
         raise GateError(f"opa eval failed: {result.stderr.strip()}")
-    document = json.loads(result.stdout)
-    return [
-        message
-        for entry in document.get("result", [])
-        for expression in entry["expressions"]
-        for message in expression["value"]
-    ]
+    document = json.loads(result.stdout)["result"][0]["expressions"][0]["value"]
+
+    report = {}
+    for package, body in sorted(document.items()):
+        if not isinstance(body, dict) or "deny" not in body:
+            continue
+        titles = body.get("titles", {})
+        if not titles:
+            raise GateError(f"package '{package}' declares no control titles")
+        gating = set(body.get("enforced", []))
+        controls = {control: {"applicable": [], "deny": []} for control in titles}
+        for entry in body.get("applicable", []):
+            controls.setdefault(entry["control"], {"applicable": [], "deny": []})
+            controls[entry["control"]]["applicable"].append(entry["resource"])
+        for entry in body.get("deny", []):
+            controls.setdefault(entry["control"], {"applicable": [], "deny": []})
+            controls[entry["control"]]["deny"].append(entry["message"])
+        report[package] = {
+            "title": body.get("title", package),
+            "titles": titles,
+            "enforced": gating,
+            "controls": controls,
+        }
+    if not report:
+        raise GateError("no rule package exposed a 'deny' rule; the gate cannot judge anything")
+    return report
 
 
 def main():
@@ -87,16 +117,34 @@ def main():
     try:
         resources = resources_from_preview(preview_file)
         reject_unknowns(label, resources)
-        failures = evaluate(resources)
-        if failures:
-            for message in failures:
-                print(f"{label}: {message}")
-            return VIOLATION
-        print(f"IMDSv2: {label} clean ({len(resources)} resources)")
-        return PASS
+        report = evaluate(resources)
     except GateError as error:
-        print(f"imdsv2 gate: {error}", file=sys.stderr)
+        print(f"policy gate: {error}", file=sys.stderr)
         return BROKEN
+
+    failed = False
+    print(f"{label} — {len(resources)} resources declared")
+    for package, entry in report.items():
+        print(f"  {package}  {entry['title']}")
+        for control in sorted(entry["controls"]):
+            found = entry["controls"][control]
+            gating = control in entry["enforced"]
+            if found["deny"] and gating:
+                state = f"FAIL ({len(found['deny'])})"
+                failed = True
+            elif found["deny"]:
+                state = f"off ({len(found['deny'])})"
+            elif found["applicable"] and gating:
+                state = f"pass ({len(found['applicable'])} checked)"
+            elif found["applicable"]:
+                state = "off"
+            else:
+                state = "n/a"
+            print(f"    {control:30} {state:18} {entry['titles'].get(control, '')}")
+            for message in sorted(found["deny"]):
+                print(f"        - {message}")
+
+    return VIOLATION if failed else PASS
 
 
 if __name__ == "__main__":

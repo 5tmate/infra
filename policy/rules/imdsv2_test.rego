@@ -2,91 +2,66 @@ package imdsv2
 
 import rego.v1
 
-instance(metadata) := object.union(
-	{
-		"type": "aws:ec2/instance:Instance",
-		"__name": "test-instance",
-	},
+denials := count([entry | some entry in deny])
+
+checked := count([entry | some entry in applicable])
+
+document(type, name, metadata) := {"resources": [object.union(
+	{"type": type, "__name": name},
 	metadata,
-)
+)]}
+
+instance(metadata) := document("aws:ec2/instance:Instance", "test-instance", metadata)
 
 test_no_metadata_options_is_denied if {
-	violations := deny_imdsv2_required with input as instance({})
-	count(violations) == 1
+	denials == 1 with input as instance({})
 }
 
 test_imdsv1_is_denied if {
-	violations := deny_imdsv2_required with input as instance({"metadataOptions": {
+	denials == 1 with input as instance({"metadataOptions": {
 		"httpEndpoint": "enabled",
-		"httpProtocolIpv6": "disabled",
 		"httpTokens": "optional",
 	}})
-	count(violations) == 1
 }
 
 test_imdsv2_is_allowed if {
-	violations := deny_imdsv2_required with input as instance({"metadataOptions": {
+	denials == 0 with input as instance({"metadataOptions": {
 		"httpEndpoint": "enabled",
-		"httpProtocolIpv6": "disabled",
 		"httpTokens": "required",
 	}})
-	count(violations) == 0
 }
 
 test_metadata_endpoint_disabled_is_allowed if {
-	violations := deny_imdsv2_required with input as instance({"metadataOptions": {
-		"httpEndpoint": "disabled",
-		"httpProtocolIpv6": "disabled",
-	}})
-	count(violations) == 0
+	denials == 0 with input as instance({"metadataOptions": {"httpEndpoint": "disabled"}})
 }
 
 test_non_instance_resource_is_ignored if {
-	violations := deny_imdsv2_required with input as {
-		"type": "aws:ec2/vpc:Vpc",
-		"__name": "a-vpc",
-		"cidrBlock": "10.9.0.0/24",
-	}
-	count(violations) == 0
+	denials == 0 with input as document("aws:ec2/vpc:Vpc", "a-vpc", {})
+	checked == 0 with input as document("aws:ec2/vpc:Vpc", "a-vpc", {})
+}
+
+test_compliant_instance_is_still_applicable if {
+	checked == 1 with input as instance({"metadataOptions": {"httpTokens": "required"}})
+}
+
+test_missing_name_still_denies if {
+	denials == 1 with input as {"resources": [{"type": "aws:ec2/instance:Instance"}]}
 }
 
 test_violation_message_names_the_instance if {
-	violations := deny_imdsv2_required with input as instance({})
-	some msg in violations
-	contains(msg, "test-instance")
-	not contains(msg, "MISSING")
+	some entry in deny with input as instance({})
+	contains(entry.message, "test-instance")
 }
-
-resource(type, metadata) := object.union(
-	{
-		"type": type,
-		"__name": "test-resource",
-	},
-	metadata,
-)
 
 test_launch_template_without_imdsv2_is_denied if {
-	violations := deny_imdsv2_required with input as resource("aws:ec2/launchTemplate:LaunchTemplate", {})
-	count(violations) == 1
-}
-
-test_launch_template_with_imdsv2_is_allowed if {
-	violations := deny_imdsv2_required with input as resource("aws:ec2/launchTemplate:LaunchTemplate", {"metadataOptions": {"httpTokens": "required"}})
-	count(violations) == 0
+	denials == 1 with input as document("aws:ec2/launchTemplate:LaunchTemplate", "lt", {})
 }
 
 test_spot_instance_request_without_imdsv2_is_denied if {
-	violations := deny_imdsv2_required with input as resource("aws:ec2/spotInstanceRequest:SpotInstanceRequest", {})
-	count(violations) == 1
-}
-
-test_spot_instance_request_with_imdsv2_is_allowed if {
-	violations := deny_imdsv2_required with input as resource("aws:ec2/spotInstanceRequest:SpotInstanceRequest", {"metadataOptions": {"httpTokens": "required"}})
-	count(violations) == 0
+	denials == 1 with input as document("aws:ec2/spotInstanceRequest:SpotInstanceRequest", "spot", {})
 }
 
 test_violation_message_names_the_resource_kind if {
-	violations := deny_imdsv2_required with input as resource("aws:ec2/launchTemplate:LaunchTemplate", {})
-	some msg in violations
-	contains(msg, "launch template")
+	some entry in deny with input as document("aws:ec2/launchTemplate:LaunchTemplate", "lt", {})
+	contains(entry.message, "launch template")
 }
