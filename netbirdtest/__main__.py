@@ -145,6 +145,46 @@ instance_profile = aws.iam.InstanceProfile(
 )
 
 
+litestream_bucket = aws.s3.BucketV2(
+    "litestream",
+    bucket="5tmate-netbirdtest-litestream",
+    force_destroy=True,
+    tags={**tags, "Name": NAME},
+)
+
+aws.s3.BucketPublicAccessBlock(
+    "litestream-pab",
+    bucket=litestream_bucket.id,
+    block_public_acls=True,
+    block_public_policy=True,
+    ignore_public_acls=True,
+    restrict_public_buckets=True,
+)
+
+aws.iam.RolePolicy(
+    "litestream-s3",
+    role=ssm_role.name,
+    policy=litestream_bucket.arn.apply(
+        lambda arn: json.dumps(
+            {
+                "Version": "2012-10-17",
+                "Statement": [
+                    {
+                        "Effect": "Allow",
+                        "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+                        "Resource": f"{arn}/*",
+                    },
+                    {
+                        "Effect": "Allow",
+                        "Action": "s3:ListBucket",
+                        "Resource": arn,
+                    },
+                ],
+            }
+        )
+    ),
+)
+
 key_pair = aws.ec2.KeyPair(
     "key",
     public_key=ssh_public_key,
@@ -176,7 +216,7 @@ instance = aws.ec2.Instance(
     },
     user_data=user_data,
     tags={**tags, "Name": NAME},
-    opts=pulumi.ResourceOptions(ignore_changes=["ami"]),
+    opts=pulumi.ResourceOptions(ignore_changes=["ami"], depends_on=[litestream_bucket]),
 )
 
 
@@ -218,6 +258,7 @@ pulumi.export("instance_id", instance.id)
 pulumi.export("public_ip", eip.public_ip)
 pulumi.export("domain", domain)
 pulumi.export("dashboard_url", f"https://{domain}")
+pulumi.export("litestream_bucket", litestream_bucket.bucket)
 pulumi.export("vpc_id", vpc.id)
 pulumi.export("security_group_id", sg.id)
 pulumi.export("ssh", eip.public_ip.apply(lambda ip: f"ssh ec2-user@{ip}"))
