@@ -1,5 +1,0 @@
-config:
-  aws:region: ap-northeast-1
-  5tmate-netbird:zone_name: 5tmate.threatreveal.org
-  5tmate-netbird:hostname: netbirdtest
-  5tmate-netbird:instance_type: t3.small

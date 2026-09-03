@@ -1,4 +1,4 @@
-name: 5tmate-netbird
+name: 5tmate-netbirdtest
 runtime:
   name: python
   options:

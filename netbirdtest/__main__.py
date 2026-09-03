@@ -7,7 +7,7 @@ import pulumi_aws as aws
 VPC_CIDR = "10.2.0.0/24"
 SUBNET_CIDR = "10.2.0.0/28"
 AZ = "ap-northeast-1a"
-NAME = "5tmate-netbird"
+NAME = "5tmate-netbirdtest"
 AMI_PARAMETER = "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64"
 
 tags = {"App": "5tmate", "ManagedBy": "pulumi"}
@@ -16,7 +16,7 @@ config = pulumi.Config()
 zone_name = config.require("zone_name")
 allowed_ssh_cidr = config.require("allowed_ssh_cidr")
 ssh_public_key = config.require("ssh_public_key")
-hostname = config.get("hostname") or "netbird"
+hostname = config.get("hostname") or "netbirdtest"
 instance_type = config.get("instance_type") or "t3.small"
 root_volume_size = config.get_int("root_volume_size") or 30
 
@@ -156,7 +156,7 @@ ami = aws.ssm.get_parameter(name=AMI_PARAMETER).value
 user_data = (Path(__file__).parent / "files" / "user_data.sh").read_text()
 
 instance = aws.ec2.Instance(
-    "netbird",
+    "netbirdtest",
     ami=ami,
     instance_type=instance_type,
     subnet_id=subnet.id,

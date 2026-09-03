@@ -1,4 +1,4 @@
-STACKS = dns landing netbird
+STACKS = dns landing netbirdtest
 
 .PHONY: fmt lint check sync
 
