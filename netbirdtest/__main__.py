@@ -176,7 +176,7 @@ aws.iam.RolePolicy(
                     },
                     {
                         "Effect": "Allow",
-                        "Action": "s3:ListBucket",
+                        "Action": ["s3:ListBucket", "s3:GetBucketLocation"],
                         "Resource": arn,
                     },
                 ],
