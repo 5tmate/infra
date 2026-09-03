@@ -69,7 +69,7 @@ aws.ec2.RouteTableAssociation(
 
 
 sg = aws.ec2.SecurityGroup(
-    "sg",
+    "control-plane",
     vpc_id=vpc.id,
     description="netbird self-hosted control plane",
     ingress=[
@@ -104,7 +104,7 @@ sg = aws.ec2.SecurityGroup(
     ],
     egress=[
         {
-            "description": "all outbound (SSM, image pull, Let's Encrypt, peers)",
+            "description": "all outbound (SSM, image pull, ACME, peers)",
             "protocol": "-1",
             "from_port": 0,
             "to_port": 0,
