@@ -1,0 +1,179 @@
+<mxfile host="app.diagrams.net">
+  <diagram name="Page-1" id="HyGK02AAHvOAacWG8LJi">
+    <mxGraphModel dx="1664" dy="967" grid="0" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1750" pageHeight="1150" math="0" shadow="0" adaptiveColors="auto">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title" parent="1" style="text;html=1;align=center;verticalAlign=middle;fontSize=18;fontStyle=1;fontColor=#232F3E;" value="Self-hosted NetBird Control Plane on AWS — Spot + Litestream, Break-glass Failover" vertex="1">
+          <mxGeometry height="30" width="1380" x="300" y="15" as="geometry" />
+        </mxCell>
+        <mxCell id="peers" parent="1" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=none;fillColor=#232F3E;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=11;fontStyle=1;aspect=fixed;pointerEvents=1;shape=mxgraph.aws4.users;" value="NetBird peers&#xa;(WireGuard mesh)" vertex="1">
+          <mxGeometry height="78" width="78" x="90" y="380" as="geometry" />
+        </mxCell>
+        <mxCell id="note_dataplane" parent="1" style="shape=note;whiteSpace=wrap;html=1;backgroundOutline=1;fillColor=#FFF2CC;strokeColor=#D6B656;fontSize=10;align=left;spacing=6;verticalAlign=top;" value="Data plane is peer-to-peer/relay — existing tunnels survive management outages; only onboarding &amp; policy changes pause" vertex="1">
+          <mxGeometry height="90" width="240" x="30" y="495" as="geometry" />
+        </mxCell>
+        <mxCell id="note_cost" parent="1" style="shape=note;whiteSpace=wrap;html=1;backgroundOutline=1;fillColor=#FFF2CC;strokeColor=#D6B656;fontSize=10;align=left;spacing=6;verticalAlign=top;" value="Cost: ~$3–5/mo total (Spot compute + EBS on stopped standby + S3 cents)" vertex="1">
+          <mxGeometry height="70" width="240" x="30" y="605" as="geometry" />
+        </mxCell>
+        <mxCell id="note_fail" parent="1" style="shape=note;whiteSpace=wrap;html=1;backgroundOutline=1;fillColor=#FFF2CC;strokeColor=#D6B656;fontSize=10;align=left;spacing=6;verticalAlign=top;" value="Failure modes: task crash → ECS restart (seconds); instance loss → ASG replace (~2–4 min); Spot exhaustion → break-glass on-demand (guaranteed start)" vertex="1">
+          <mxGeometry height="110" width="240" x="30" y="695" as="geometry" />
+        </mxCell>
+        <mxCell id="note_fence" parent="1" style="shape=note;whiteSpace=wrap;html=1;backgroundOutline=1;fillColor=#FFF2CC;strokeColor=#D6B656;fontSize=10;align=left;spacing=6;verticalAlign=top;" value="Fencing: single EIP holder + ASG desired=0 before promote; stop-before-start deployment" vertex="1">
+          <mxGeometry height="80" width="240" x="30" y="825" as="geometry" />
+        </mxCell>
+        <mxCell id="awscloud" parent="1" style="points=[[0,0],[0.25,0],[0.5,0],[0.75,0],[1,0],[1,0.25],[1,0.5],[1,0.75],[1,1],[0.75,1],[0.5,1],[0.25,1],[0,1],[0,0.75],[0,0.5],[0,0.25]];outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=12;fontStyle=1;container=1;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_aws_cloud_alt;strokeColor=#232F3E;fillColor=none;verticalAlign=top;align=left;spacingLeft=30;fontColor=#232F3E;dashed=0;" value="AWS Cloud" vertex="1">
+          <mxGeometry height="1040" width="1380" x="300" y="70" as="geometry" />
+        </mxCell>
+        <mxCell id="region" parent="awscloud" style="points=[[0,0],[0.25,0],[0.5,0],[0.75,0],[1,0],[1,0.25],[1,0.5],[1,0.75],[1,1],[0.75,1],[0.5,1],[0.25,1],[0,1],[0,0.75],[0,0.5],[0,0.25]];outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=12;fontStyle=0;container=1;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_region;strokeColor=#00A4A6;fillColor=none;verticalAlign=top;align=left;spacingLeft=30;fontColor=#00A4A6;dashed=1;" value="Region (single)" vertex="1">
+          <mxGeometry height="960" width="1300" x="40" y="40" as="geometry" />
+        </mxCell>
+        <mxCell id="vpc" parent="region" style="points=[[0,0],[0.25,0],[0.5,0],[0.75,0],[1,0],[1,0.25],[1,0.5],[1,0.75],[1,1],[0.75,1],[0.5,1],[0.25,1],[0,1],[0,0.75],[0,0.5],[0,0.25]];outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=12;fontStyle=0;container=1;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_vpc2;strokeColor=#8C4FFF;fillColor=none;verticalAlign=top;align=left;spacingLeft=30;fontColor=#8C4FFF;dashed=0;" value="VPC" vertex="1">
+          <mxGeometry height="560" width="990" x="20" y="40" as="geometry" />
+        </mxCell>
+        <mxCell id="aza" parent="vpc" style="points=[[0,0],[0.25,0],[0.5,0],[0.75,0],[1,0],[1,0.25],[1,0.5],[1,0.75],[1,1],[0.75,1],[0.5,1],[0.25,1],[0,1],[0,0.75],[0,0.5],[0,0.25]];outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=11;fontStyle=0;container=1;pointerEvents=0;collapsible=0;recursiveResize=0;fillColor=none;strokeColor=#147EBA;verticalAlign=top;align=left;spacingLeft=10;fontColor=#147EBA;dashed=1;" value="Availability Zone a" vertex="1">
+          <mxGeometry height="430" width="400" x="20" y="40" as="geometry" />
+        </mxCell>
+        <mxCell id="asg" parent="aza" style="points=[[0,0],[0.25,0],[0.5,0],[0.75,0],[1,0],[1,0.25],[1,0.5],[1,0.75],[1,1],[0.75,1],[0.5,1],[0.25,1],[0,1],[0,0.75],[0,0.5],[0,0.25]];outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=9;fontStyle=0;container=1;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_auto_scaling_group;grStroke=1;strokeColor=#D86613;fillColor=none;verticalAlign=top;align=left;spacingLeft=28;fontColor=#D86613;dashed=1;" value="Spot ASG (min=1, max=1, desired=1) — mixed instance policy: t4g.micro / t3a.micro / t3.micro / m6g.medium" vertex="1">
+          <mxGeometry height="380" width="370" x="15" y="35" as="geometry" />
+        </mxCell>
+        <mxCell id="spotinstance" parent="asg" style="points=[[0,0],[0.25,0],[0.5,0],[0.75,0],[1,0],[1,0.25],[1,0.5],[1,0.75],[1,1],[0.75,1],[0.5,1],[0.25,1],[0,1],[0,0.75],[0,0.5],[0,0.25]];outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=9;fontStyle=0;container=1;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_ec2_instance_contents;strokeColor=#D86613;fillColor=none;verticalAlign=top;align=left;spacingLeft=28;fontColor=#D86613;dashed=0;" value="EC2 Spot instance — ECS (capacity provider, host network mode)" vertex="1">
+          <mxGeometry height="305" width="340" x="15" y="55" as="geometry" />
+        </mxCell>
+        <mxCell id="ecstask" parent="spotinstance" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#ED7100;dashed=1;verticalAlign=top;align=left;spacingLeft=8;fontSize=10;fontColor=#ED7100;container=1;pointerEvents=0;collapsible=0;recursiveResize=0;" value="ECS task" vertex="1">
+          <mxGeometry height="180" width="310" x="15" y="45" as="geometry" />
+        </mxCell>
+        <mxCell id="c_mgmt" parent="ecstask" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFE6CC;strokeColor=#D79B00;fontSize=9;" value="NetBird Management — combined server: mgmt + signal + relay/STUN (SQLite store)" vertex="1">
+          <mxGeometry height="70" width="290" x="10" y="28" as="geometry" />
+        </mxCell>
+        <mxCell id="c_lite" parent="ecstask" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;fontSize=9;" value="Litestream sidecar — WAL streaming" vertex="1">
+          <mxGeometry height="62" width="290" x="10" y="105" as="geometry" />
+        </mxCell>
+        <mxCell id="bootnote" parent="spotinstance" style="shape=note;whiteSpace=wrap;html=1;backgroundOutline=1;fillColor=#FFF2CC;strokeColor=#D6B656;fontSize=9;align=left;spacing=4;" value="user-data: associate EIP + litestream restore on start" vertex="1">
+          <mxGeometry height="55" width="310" x="15" y="238" as="geometry" />
+        </mxCell>
+        <mxCell id="azb" parent="vpc" style="points=[[0,0],[0.25,0],[0.5,0],[0.75,0],[1,0],[1,0.25],[1,0.5],[1,0.75],[1,1],[0.75,1],[0.5,1],[0.25,1],[0,1],[0,0.75],[0,0.5],[0,0.25]];outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=11;fontStyle=0;container=1;pointerEvents=0;collapsible=0;recursiveResize=0;fillColor=none;strokeColor=#147EBA;verticalAlign=top;align=left;spacingLeft=10;fontColor=#147EBA;dashed=1;" value="Availability Zone b" vertex="1">
+          <mxGeometry height="430" width="400" x="570" y="40" as="geometry" />
+        </mxCell>
+        <mxCell id="standby" parent="azb" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#F5F5F5;strokeColor=#999999;dashed=1;verticalAlign=top;align=left;spacing=8;fontSize=9;fontColor=#666666;container=1;pointerEvents=0;collapsible=0;recursiveResize=0;" value="STOPPED — break-glass standby: EC2 On-Demand t4g.micro (EBS-only cost, outside ASG)" vertex="1">
+          <mxGeometry height="310" width="370" x="15" y="55" as="geometry" />
+        </mxCell>
+        <mxCell id="standbytask" parent="standby" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#B3B3B3;dashed=1;verticalAlign=top;align=left;spacingLeft=8;fontSize=9;fontColor=#999999;opacity=60;container=1;pointerEvents=0;collapsible=0;recursiveResize=0;" value="ECS task (cold)" vertex="1">
+          <mxGeometry height="170" width="340" x="15" y="50" as="geometry" />
+        </mxCell>
+        <mxCell id="c2_mgmt" parent="standbytask" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFE6CC;strokeColor=#D79B00;fontSize=9;opacity=45;" value="NetBird Management (combined server)" vertex="1">
+          <mxGeometry height="60" width="320" x="10" y="28" as="geometry" />
+        </mxCell>
+        <mxCell id="c2_lite" parent="standbytask" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;fontSize=9;opacity=45;" value="Litestream sidecar" vertex="1">
+          <mxGeometry height="55" width="320" x="10" y="98" as="geometry" />
+        </mxCell>
+        <mxCell id="standby_note" parent="standby" style="text;html=1;fontSize=9;fontColor=#999999;align=left;" value="started only on Spot exhaustion; promoted after fencing" vertex="1">
+          <mxGeometry height="30" width="340" x="15" y="235" as="geometry" />
+        </mxCell>
+        <mxCell id="eip" parent="vpc" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=none;fillColor=#8C4FFF;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=1;aspect=fixed;pointerEvents=1;shape=mxgraph.aws4.elastic_ip_address;" value="Elastic IP&#xa;(stable endpoint)" vertex="1">
+          <mxGeometry height="72" width="72" x="459" y="210" as="geometry" />
+        </mxCell>
+        <mxCell id="s3" parent="region" style="sketch=0;points=[[0,0,0],[0.25,0,0],[0.5,0,0],[0.75,0,0],[1,0,0],[0,1,0],[0.25,1,0],[0.5,1,0],[0.75,1,0],[1,1,0],[0,0.25,0],[0,0.5,0],[0,0.75,0],[1,0.25,0],[1,0.5,0],[1,0.75,0]];outlineConnect=0;fontColor=#232F3E;gradientColor=#60A337;gradientDirection=north;fillColor=#277116;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.s3;" value="S3 — Litestream replica (WAL generations) + periodic full snapshots" vertex="1">
+          <mxGeometry height="78" width="78" x="1060" y="430" as="geometry" />
+        </mxCell>
+        <mxCell id="obsband" parent="region" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#7F7F7F;dashed=1;verticalAlign=top;align=left;spacing=8;fontSize=12;fontStyle=1;fontColor=#7F7F7F;container=1;pointerEvents=0;collapsible=0;recursiveResize=0;" value="Failover &amp; Observability" vertex="1">
+          <mxGeometry height="280" width="1240" x="20" y="630" as="geometry" />
+        </mxCell>
+        <mxCell id="lambda" parent="obsband" style="sketch=0;points=[[0,0,0],[0.25,0,0],[0.5,0,0],[0.75,0,0],[1,0,0],[0,1,0],[0.25,1,0],[0.5,1,0],[0.75,1,0],[1,1,0],[0,0.25,0],[0,0.5,0],[0,0.75,0],[1,0.25,0],[1,0.5,0],[1,0.75,0]];outlineConnect=0;fontColor=#232F3E;gradientColor=#F78E04;gradientDirection=north;fillColor=#D05C17;strokeColor=#ffffff;dashed=1;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.lambda;opacity=75;" value="Lambda — optional automation" vertex="1">
+          <mxGeometry height="64" width="64" x="60" y="90" as="geometry" />
+        </mxCell>
+        <mxCell id="r53" parent="obsband" style="sketch=0;points=[[0,0,0],[0.25,0,0],[0.5,0,0],[0.75,0,0],[1,0,0],[0,1,0],[0.25,1,0],[0.5,1,0],[0.75,1,0],[1,1,0],[0,0.25,0],[0,0.5,0],[0,0.75,0],[1,0.25,0],[1,0.5,0],[1,0.75,0]];outlineConnect=0;fontColor=#232F3E;gradientColor=#945DF2;gradientDirection=north;fillColor=#5A30B5;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.route_53;" value="Route 53 health check on EIP (confirmation gate)" vertex="1">
+          <mxGeometry height="64" width="64" x="320" y="90" as="geometry" />
+        </mxCell>
+        <mxCell id="cw" parent="obsband" style="sketch=0;points=[[0,0,0],[0.25,0,0],[0.5,0,0],[0.75,0,0],[1,0,0],[0,1,0],[0.25,1,0],[0.5,1,0],[0.75,1,0],[1,1,0],[0,0.25,0],[0,0.5,0],[0,0.75,0],[1,0.25,0],[1,0.5,0],[1,0.75,0]];outlineConnect=0;fontColor=#232F3E;gradientColor=#F34482;gradientDirection=north;fillColor=#BC1356;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.cloudwatch_2;" value="CloudWatch alarm: GroupInServiceInstances &lt; 1 for N min" vertex="1">
+          <mxGeometry height="64" width="64" x="580" y="25" as="geometry" />
+        </mxCell>
+        <mxCell id="eb" parent="obsband" style="sketch=0;points=[[0,0,0],[0.25,0,0],[0.5,0,0],[0.75,0,0],[1,0,0],[0,1,0],[0.25,1,0],[0.5,1,0],[0.75,1,0],[1,1,0],[0,0.25,0],[0,0.5,0],[0,0.75,0],[1,0.25,0],[1,0.5,0],[1,0.75,0]];outlineConnect=0;fontColor=#232F3E;gradientColor=#F34482;gradientDirection=north;fillColor=#BC1356;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.eventbridge;" value="EventBridge: EC2 Instance Launch Unsuccessful (Spot exhaustion)" vertex="1">
+          <mxGeometry height="64" width="64" x="580" y="165" as="geometry" />
+        </mxCell>
+        <mxCell id="sns" parent="obsband" style="sketch=0;points=[[0,0,0],[0.25,0,0],[0.5,0,0],[0.75,0,0],[1,0,0],[0,1,0],[0.25,1,0],[0.5,1,0],[0.75,1,0],[1,1,0],[0,0.25,0],[0,0.5,0],[0,0.75,0],[1,0.25,0],[1,0.5,0],[1,0.75,0]];outlineConnect=0;fontColor=#232F3E;gradientColor=#F34482;gradientDirection=north;fillColor=#BC1356;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.simple_notification_service;" value="SNS topic" vertex="1">
+          <mxGeometry height="64" width="64" x="840" y="90" as="geometry" />
+        </mxCell>
+        <mxCell id="slack" parent="obsband" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=none;fillColor=#E6E6E6;strokeColor=#232F3E;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;pointerEvents=1;shape=mxgraph.aws4.mobile_client;" value="Slack / on-call" vertex="1">
+          <mxGeometry height="64" width="64" x="1060" y="90" as="geometry" />
+        </mxCell>
+        <mxCell id="note_failback" parent="obsband" style="shape=note;whiteSpace=wrap;html=1;backgroundOutline=1;fillColor=#FFF2CC;strokeColor=#D6B656;fontSize=9;align=left;spacing=4;" value="failback is manual by design" vertex="1">
+          <mxGeometry height="40" width="200" x="1010" y="15" as="geometry" />
+        </mxCell>
+        <mxCell id="e_peers" edge="1" parent="1" source="peers" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#232F3E;strokeWidth=2;fontSize=10;exitX=0.5;exitY=0;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="eip" value="gRPC/HTTPS mgmt + signal; UDP 3478 STUN">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="129" y="130" />
+              <mxPoint x="855" y="130" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e_assoc" edge="1" parent="1" source="eip" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#232F3E;strokeWidth=2;fontSize=10;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0.38;entryDx=0;entryDy=0;" target="spotinstance" value="associated">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_reassoc" edge="1" parent="1" source="eip" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#7A7A7A;strokeWidth=2;dashed=1;fontSize=10;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" target="standby" value="re-associated on failover">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_wal" edge="1" parent="1" source="c_lite" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#277116;strokeWidth=2;fontSize=10;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0.5;entryY=1;entryDx=0;entryDy=0;" target="s3" value="continuous WAL replication (RPO ~seconds)">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="772" y="461" />
+              <mxPoint x="772" y="665" />
+              <mxPoint x="1439" y="665" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e_restore" edge="1" parent="1" source="s3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#7A7A7A;strokeWidth=2;dashed=1;fontSize=10;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" target="standby" value="litestream restore on promote">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1365" y="579" />
+              <mxPoint x="1365" y="400" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e_cw" edge="1" parent="1" source="cw" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#BC1356;strokeWidth=1.5;fontSize=10;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.25;entryDx=0;entryDy=0;" target="sns" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_eb" edge="1" parent="1" source="eb" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#BC1356;strokeWidth=1.5;fontSize=10;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.75;entryDx=0;entryDy=0;" target="sns" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_sns" edge="1" parent="1" source="sns" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#BC1356;strokeWidth=1.5;fontSize=10;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" target="slack" value="alert on-call">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_r53" edge="1" parent="1" source="r53" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#7A7A7A;strokeWidth=1.5;dashed=1;fontSize=10;exitX=0.5;exitY=0;exitDx=0;exitDy=0;entryX=0.35;entryY=1;entryDx=0;entryDy=0;" target="eip" value="confirms EIP down (gate)">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="712" y="690" />
+              <mxPoint x="844" y="690" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e_l_asg" edge="1" parent="1" source="lambda" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#D05C17;strokeWidth=1.5;dashed=1;fontSize=10;exitX=0.5;exitY=0;exitDx=0;exitDy=0;entryX=0.5;entryY=1;entryDx=0;entryDy=0;" target="asg" value="set ASG desired=0 (fence)">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="452" y="700" />
+              <mxPoint x="580" y="700" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e_l_eip" edge="1" parent="1" source="lambda" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#D05C17;strokeWidth=1.5;dashed=1;fontSize=10;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0.65;entryY=1;entryDx=0;entryDy=0;" target="eip" value="associate EIP">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="600" y="862" />
+              <mxPoint x="600" y="705" />
+              <mxPoint x="866" y="705" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e_l_standby" edge="1" parent="1" source="lambda" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#D05C17;strokeWidth=1.5;dashed=1;fontSize=10;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=1;entryDx=0;entryDy=0;" target="standby" value="start standby instance">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="452" y="1000" />
+              <mxPoint x="1130" y="1000" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
