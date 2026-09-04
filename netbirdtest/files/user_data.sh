@@ -9,7 +9,10 @@ LITESTREAM_VERSION=__LITESTREAM_VERSION__
 NB_DIR=/home/ec2-user/netbird
 
 volume_path() {
-  docker volume inspect -f '{{.Mountpoint}}' "$(docker volume ls -q --filter "name=$1")"
+  local name
+  name=$(docker volume ls -q --filter "name=$1" | head -1)
+  test -n "$name"
+  docker volume inspect -f '{{.Mountpoint}}' "$name"
 }
 
 write_litestream_config() {
@@ -106,7 +109,7 @@ cd ${NB_DIR}
 for f in docker-compose.yml config.yaml dashboard.env; do
   aws s3 cp "\$f" "s3://${BUCKET}/config/\$f" --region ${REGION} --only-show-errors
 done
-ACME=\$(docker volume inspect -f '{{.Mountpoint}}' "\$(docker volume ls -q --filter name=letsencrypt)")/acme.json
+ACME=\$(docker volume inspect -f '{{.Mountpoint}}' "\$(docker volume ls -q --filter name=letsencrypt | head -1)")/acme.json
 if [ -s "\$ACME" ]; then
   aws s3 cp "\$ACME" "s3://${BUCKET}/config/acme.json" --region ${REGION} --only-show-errors
 fi
