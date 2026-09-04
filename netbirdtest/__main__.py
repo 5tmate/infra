@@ -18,6 +18,8 @@ allowed_ssh_cidr = config.require("allowed_ssh_cidr")
 ssh_public_key = config.require("ssh_public_key")
 hostname = config.get("hostname") or "netbirdtest"
 instance_type = config.get("instance_type") or "t3.small"
+letsencrypt_email = config.require_secret("letsencrypt_email")
+litestream_version = config.get("litestream_version") or "0.5.17"
 root_volume_size = config.get_int("root_volume_size") or 30
 
 domain = f"{hostname}.{zone_name}"
@@ -192,8 +194,19 @@ key_pair = aws.ec2.KeyPair(
 )
 
 ami = aws.ssm.get_parameter(name=AMI_PARAMETER).value
+region = aws.get_region().name
 
-user_data = (Path(__file__).parent / "files" / "user_data.sh").read_text()
+_user_data = (Path(__file__).parent / "files" / "user_data.sh").read_text()
+
+user_data = pulumi.Output.all(litestream_bucket.bucket, letsencrypt_email).apply(
+    lambda args: (
+        _user_data.replace("__DOMAIN__", domain)
+        .replace("__BUCKET__", args[0])
+        .replace("__REGION__", region)
+        .replace("__LE_EMAIL__", args[1])
+        .replace("__LITESTREAM_VERSION__", litestream_version)
+    )
+)
 
 instance = aws.ec2.Instance(
     "netbirdtest",
@@ -215,6 +228,7 @@ instance = aws.ec2.Instance(
         "delete_on_termination": True,
     },
     user_data=user_data,
+    user_data_replace_on_change=True,
     tags={**tags, "Name": NAME},
     opts=pulumi.ResourceOptions(ignore_changes=["ami"], depends_on=[litestream_bucket]),
 )
