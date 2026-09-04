@@ -20,6 +20,7 @@ hostname = config.get("hostname") or "netbirdtest"
 instance_type = config.get("instance_type") or "t3.small"
 letsencrypt_email = config.require_secret("letsencrypt_email")
 litestream_version = config.get("litestream_version") or "0.5.17"
+litestream_bucket = config.require("litestream_bucket")
 root_volume_size = config.get_int("root_volume_size") or 30
 
 domain = f"{hostname}.{zone_name}"
@@ -147,43 +148,27 @@ instance_profile = aws.iam.InstanceProfile(
 )
 
 
-litestream_bucket = aws.s3.BucketV2(
-    "litestream",
-    bucket="5tmate-netbirdtest-litestream",
-    force_destroy=True,
-    tags={**tags, "Name": NAME},
-)
-
-aws.s3.BucketPublicAccessBlock(
-    "litestream-pab",
-    bucket=litestream_bucket.id,
-    block_public_acls=True,
-    block_public_policy=True,
-    ignore_public_acls=True,
-    restrict_public_buckets=True,
-)
+backup_bucket = aws.s3.get_bucket(bucket=litestream_bucket)
 
 aws.iam.RolePolicy(
     "litestream-s3",
     role=ssm_role.name,
-    policy=litestream_bucket.arn.apply(
-        lambda arn: json.dumps(
-            {
-                "Version": "2012-10-17",
-                "Statement": [
-                    {
-                        "Effect": "Allow",
-                        "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
-                        "Resource": f"{arn}/*",
-                    },
-                    {
-                        "Effect": "Allow",
-                        "Action": ["s3:ListBucket", "s3:GetBucketLocation"],
-                        "Resource": arn,
-                    },
-                ],
-            }
-        )
+    policy=json.dumps(
+        {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Effect": "Allow",
+                    "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+                    "Resource": f"{backup_bucket.arn}/*",
+                },
+                {
+                    "Effect": "Allow",
+                    "Action": ["s3:ListBucket", "s3:GetBucketLocation"],
+                    "Resource": backup_bucket.arn,
+                },
+            ],
+        }
     ),
 )
 
@@ -198,12 +183,12 @@ region = aws.get_region().name
 
 _user_data = (Path(__file__).parent / "files" / "user_data.sh").read_text()
 
-user_data = pulumi.Output.all(litestream_bucket.bucket, letsencrypt_email).apply(
-    lambda args: (
+user_data = letsencrypt_email.apply(
+    lambda email: (
         _user_data.replace("__DOMAIN__", domain)
-        .replace("__BUCKET__", args[0])
+        .replace("__BUCKET__", litestream_bucket)
         .replace("__REGION__", region)
-        .replace("__LE_EMAIL__", args[1])
+        .replace("__LE_EMAIL__", email)
         .replace("__LITESTREAM_VERSION__", litestream_version)
     )
 )
@@ -230,7 +215,7 @@ instance = aws.ec2.Instance(
     user_data=user_data,
     user_data_replace_on_change=True,
     tags={**tags, "Name": NAME},
-    opts=pulumi.ResourceOptions(ignore_changes=["ami"], depends_on=[litestream_bucket]),
+    opts=pulumi.ResourceOptions(ignore_changes=["ami"]),
 )
 
 
@@ -272,7 +257,7 @@ pulumi.export("instance_id", instance.id)
 pulumi.export("public_ip", eip.public_ip)
 pulumi.export("domain", domain)
 pulumi.export("dashboard_url", f"https://{domain}")
-pulumi.export("litestream_bucket", litestream_bucket.bucket)
+pulumi.export("litestream_bucket", litestream_bucket)
 pulumi.export("vpc_id", vpc.id)
 pulumi.export("security_group_id", sg.id)
 pulumi.export("ssh", eip.public_ip.apply(lambda ip: f"ssh ec2-user@{ip}"))
