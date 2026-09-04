@@ -18,7 +18,7 @@ allowed_ssh_cidr = config.require("allowed_ssh_cidr")
 ssh_public_key = config.require("ssh_public_key")
 hostname = config.get("hostname") or "netbirdtest"
 instance_type = config.get("instance_type") or "t3.small"
-letsencrypt_email = config.require_secret("letsencrypt_email")
+letsencrypt_email = config.get("letsencrypt_email") or f"admin@{zone_name}"
 litestream_version = config.get("litestream_version") or "0.5.17"
 litestream_bucket = config.require("litestream_bucket")
 root_volume_size = config.get_int("root_volume_size") or 30
@@ -183,14 +183,12 @@ region = aws.get_region().name
 
 _user_data = (Path(__file__).parent / "files" / "user_data.sh").read_text()
 
-user_data = letsencrypt_email.apply(
-    lambda email: (
-        _user_data.replace("__DOMAIN__", domain)
-        .replace("__BUCKET__", litestream_bucket)
-        .replace("__REGION__", region)
-        .replace("__LE_EMAIL__", email)
-        .replace("__LITESTREAM_VERSION__", litestream_version)
-    )
+user_data = (
+    _user_data.replace("__DOMAIN__", domain)
+    .replace("__BUCKET__", litestream_bucket)
+    .replace("__REGION__", region)
+    .replace("__LE_EMAIL__", letsencrypt_email)
+    .replace("__LITESTREAM_VERSION__", litestream_version)
 )
 
 instance = aws.ec2.Instance(
