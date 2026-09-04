@@ -143,8 +143,22 @@ systemctl daemon-reload
 systemctl enable --now netbird-backup-config.timer
 
 ACME_FILE=$(volume_path letsencrypt)/acme.json
-for _ in $(seq 1 30); do
-  [ -s "$ACME_FILE" ] && break
-  sleep 10
-done
+
+acme_has_certificate() {
+  jq -e '[.[].Certificates // [] | .[]] | length > 0' "$ACME_FILE" >/dev/null 2>&1
+}
+
+wait_for_certificate() {
+  for _ in $(seq 1 24); do
+    acme_has_certificate && return 0
+    sleep 10
+  done
+  return 1
+}
+
+if ! wait_for_certificate; then
+  docker compose restart traefik
+  wait_for_certificate || echo "no certificate after retry; serving the Traefik default" >&2
+fi
+
 /usr/local/bin/netbird-backup-config
