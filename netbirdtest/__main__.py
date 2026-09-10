@@ -388,14 +388,13 @@ aws.cloudwatch.LogResourcePolicy(
     ),
 )
 
-launch_failed = aws.cloudwatch.EventRule(
-    "launch-failed",
-    name=f"{NAME}-launch-failed",
-    description="the group tried to launch an instance and could not",
+asg_events = aws.cloudwatch.EventRule(
+    "asg-events",
+    name=f"{NAME}-asg-events",
+    description="every scaling event this group emits",
     event_pattern=json.dumps(
         {
             "source": ["aws.autoscaling"],
-            "detail-type": ["EC2 Instance Launch Unsuccessful"],
             "detail": {"AutoScalingGroupName": [NAME]},
         }
     ),
@@ -403,8 +402,8 @@ launch_failed = aws.cloudwatch.EventRule(
 )
 
 aws.cloudwatch.EventTarget(
-    "launch-failed-log",
-    rule=launch_failed.name,
+    "asg-events-log",
+    rule=asg_events.name,
     target_id="log",
     arn=event_log.arn,
 )
