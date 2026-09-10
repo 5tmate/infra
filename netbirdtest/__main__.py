@@ -329,9 +329,7 @@ aws.sns.TopicPolicy(
                 "Statement": [
                     {
                         "Effect": "Allow",
-                        "Principal": {
-                            "Service": ["cloudwatch.amazonaws.com", "events.amazonaws.com"]
-                        },
+                        "Principal": {"Service": "cloudwatch.amazonaws.com"},
                         "Action": "sns:Publish",
                         "Resource": arn,
                     }
@@ -402,13 +400,6 @@ launch_failed = aws.cloudwatch.EventRule(
         }
     ),
     tags={**tags, "Name": NAME},
-)
-
-aws.cloudwatch.EventTarget(
-    "launch-failed-sns",
-    rule=launch_failed.name,
-    target_id="sns",
-    arn=alerts.arn,
 )
 
 aws.cloudwatch.EventTarget(
