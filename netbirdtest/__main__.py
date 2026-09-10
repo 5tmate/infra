@@ -23,7 +23,10 @@ litestream_version = config.get("litestream_version") or "0.5.17"
 litestream_bucket = config.require("litestream_bucket")
 root_volume_size = config.get_int("root_volume_size") or 30
 instance_types = config.get_object("instance_types") or ["t3.small", "t3a.small", "t2.small"]
-on_demand_base = config.get_int("on_demand_base") or 1
+on_demand_base = config.get_int("on_demand_base")
+if on_demand_base is None:
+    on_demand_base = 1
+spot_max_price = config.get("spot_max_price")
 desired_capacity = config.get_int("desired_capacity")
 if desired_capacity is None:
     desired_capacity = 1
@@ -276,6 +279,7 @@ asg = aws.autoscaling.Group(
             "on_demand_base_capacity": on_demand_base,
             "on_demand_percentage_above_base_capacity": 0,
             "spot_allocation_strategy": "capacity-optimized",
+            "spot_max_price": spot_max_price,
         },
         "launch_template": {
             "launch_template_specification": {
