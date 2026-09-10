@@ -6,7 +6,20 @@ BUCKET=__BUCKET__
 REGION=__REGION__
 LE_EMAIL=__LE_EMAIL__
 LITESTREAM_VERSION=__LITESTREAM_VERSION__
+EIP_ALLOC=__EIP_ALLOC__
+EIP_ADDR=__EIP_ADDR__
 NB_DIR=/home/ec2-user/netbird
+
+imds() {
+  local token
+  token=$(curl -sX PUT http://169.254.169.254/latest/api/token \
+    -H "X-aws-ec2-metadata-token-ttl-seconds: 60")
+  curl -s -H "X-aws-ec2-metadata-token: $token" \
+    "http://169.254.169.254/latest/meta-data/$1"
+}
+
+aws ec2 associate-address --allocation-id "$EIP_ALLOC" \
+  --instance-id "$(imds instance-id)" --allow-reassociation --region "$REGION"
 
 volume_path() {
   local name
@@ -48,18 +61,21 @@ rpm -i /tmp/litestream.rpm
 systemctl disable litestream || true
 litestream version
 
-TOKEN=$(curl -sX PUT http://169.254.169.254/latest/api/token \
-  -H "X-aws-ec2-metadata-token-ttl-seconds: 900")
-SELF=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" \
-  http://169.254.169.254/latest/meta-data/public-ipv4)
+for _ in $(seq 1 30); do
+  if [ "$(imds public-ipv4)" = "$EIP_ADDR" ]; then
+    break
+  fi
+  sleep 2
+done
+test "$(imds public-ipv4)" = "$EIP_ADDR"
 
 for _ in $(seq 1 90); do
-  if [ "$(getent ahostsv4 "$DOMAIN" | awk 'NR==1{print $1}')" = "$SELF" ]; then
+  if [ "$(getent ahostsv4 "$DOMAIN" | awk 'NR==1{print $1}')" = "$EIP_ADDR" ]; then
     break
   fi
   sleep 10
 done
-test "$(getent ahostsv4 "$DOMAIN" | awk 'NR==1{print $1}')" = "$SELF"
+test "$(getent ahostsv4 "$DOMAIN" | awk 'NR==1{print $1}')" = "$EIP_ADDR"
 
 install -d -o ec2-user -g ec2-user "$NB_DIR"
 cd "$NB_DIR"

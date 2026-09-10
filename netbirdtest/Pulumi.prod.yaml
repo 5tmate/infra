@@ -4,4 +4,5 @@ config:
   5tmate-netbirdtest:hostname: netbirdtest
   5tmate-netbirdtest:instance_type: t3.small
   5tmate-netbirdtest:litestream_bucket: 5tmate-netbirdtest-backup
+  5tmate-netbirdtest:desired_capacity: "0"
 encryptionsalt: v1:j8m5Cxl0OKk=:v1:9KiI79pGZokz/trq:zzUuAOItnwmyCxafRdjljNwHHhHZuQ==

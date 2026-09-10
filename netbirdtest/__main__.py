@@ -1,3 +1,4 @@
+import base64
 import json
 from pathlib import Path
 
@@ -9,6 +10,7 @@ SUBNET_CIDR = "10.2.0.0/28"
 AZ = "ap-northeast-1a"
 NAME = "5tmate-netbirdtest"
 AMI_PARAMETER = "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64"
+HEALTH_CHECK_REGION = "us-east-1"
 
 tags = {"App": "5tmate", "ManagedBy": "pulumi"}
 
@@ -17,11 +19,16 @@ zone_name = config.require("zone_name")
 allowed_ssh_cidr = config.require("allowed_ssh_cidr")
 ssh_public_key = config.require("ssh_public_key")
 hostname = config.get("hostname") or "netbirdtest"
-instance_type = config.get("instance_type") or "t3.small"
 letsencrypt_email = config.get("letsencrypt_email") or f"admin@{zone_name}"
 litestream_version = config.get("litestream_version") or "0.5.17"
 litestream_bucket = config.require("litestream_bucket")
 root_volume_size = config.get_int("root_volume_size") or 30
+instance_types = config.get_object("instance_types") or ["t3.small", "t3a.small", "t2.small"]
+on_demand_base = config.get_int("on_demand_base") or 1
+desired_capacity = config.get_int("desired_capacity")
+if desired_capacity is None:
+    desired_capacity = 1
+capacity_alarm_periods = config.get_int("capacity_alarm_periods") or 5
 
 domain = f"{hostname}.{zone_name}"
 
@@ -181,41 +188,6 @@ key_pair = aws.ec2.KeyPair(
 ami = aws.ssm.get_parameter(name=AMI_PARAMETER).value
 region = aws.get_region().name
 
-_user_data = (Path(__file__).parent / "files" / "user_data.sh").read_text()
-
-user_data = (
-    _user_data.replace("__DOMAIN__", domain)
-    .replace("__BUCKET__", litestream_bucket)
-    .replace("__REGION__", region)
-    .replace("__LE_EMAIL__", letsencrypt_email)
-    .replace("__LITESTREAM_VERSION__", litestream_version)
-)
-
-instance = aws.ec2.Instance(
-    "netbirdtest",
-    ami=ami,
-    instance_type=instance_type,
-    subnet_id=subnet.id,
-    vpc_security_group_ids=[sg.id],
-    iam_instance_profile=instance_profile.name,
-    key_name=key_pair.key_name,
-    associate_public_ip_address=True,
-    metadata_options={
-        "http_endpoint": "enabled",
-        "http_tokens": "required",
-    },
-    root_block_device={
-        "volume_type": "gp3",
-        "volume_size": root_volume_size,
-        "encrypted": True,
-        "delete_on_termination": True,
-    },
-    user_data=user_data,
-    user_data_replace_on_change=True,
-    tags={**tags, "Name": NAME},
-    opts=pulumi.ResourceOptions(ignore_changes=["ami"]),
-)
-
 
 eip = aws.ec2.Eip(
     "eip",
@@ -223,10 +195,101 @@ eip = aws.ec2.Eip(
     tags={**tags, "Name": NAME},
 )
 
-aws.ec2.EipAssociation(
-    "eip-assoc",
-    instance_id=instance.id,
-    allocation_id=eip.id,
+aws.iam.RolePolicy(
+    "eip-associate",
+    role=ssm_role.name,
+    policy=json.dumps(
+        {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Effect": "Allow",
+                    "Action": ["ec2:AssociateAddress", "ec2:DescribeAddresses"],
+                    "Resource": "*",
+                }
+            ],
+        }
+    ),
+)
+
+
+_user_data = (Path(__file__).parent / "files" / "user_data.sh").read_text()
+
+user_data = pulumi.Output.all(eip.id, eip.public_ip).apply(
+    lambda a: (
+        _user_data.replace("__DOMAIN__", domain)
+        .replace("__BUCKET__", litestream_bucket)
+        .replace("__REGION__", region)
+        .replace("__LE_EMAIL__", letsencrypt_email)
+        .replace("__LITESTREAM_VERSION__", litestream_version)
+        .replace("__EIP_ALLOC__", a[0])
+        .replace("__EIP_ADDR__", a[1])
+    )
+)
+
+
+launch_template = aws.ec2.LaunchTemplate(
+    "lt",
+    name_prefix=f"{NAME}-",
+    image_id=ami,
+    key_name=key_pair.key_name,
+    vpc_security_group_ids=[sg.id],
+    iam_instance_profile={"arn": instance_profile.arn},
+    metadata_options={
+        "http_endpoint": "enabled",
+        "http_tokens": "required",
+    },
+    block_device_mappings=[
+        {
+            "device_name": "/dev/xvda",
+            "ebs": {
+                "volume_type": "gp3",
+                "volume_size": root_volume_size,
+                "encrypted": "true",
+                "delete_on_termination": "true",
+            },
+        }
+    ],
+    user_data=user_data.apply(lambda t: base64.b64encode(t.encode()).decode()),
+    update_default_version=True,
+    tag_specifications=[
+        {"resource_type": "instance", "tags": {**tags, "Name": NAME}},
+        {"resource_type": "volume", "tags": {**tags, "Name": NAME}},
+    ],
+    tags={**tags, "Name": NAME},
+)
+
+
+asg = aws.autoscaling.Group(
+    "asg",
+    name=NAME,
+    vpc_zone_identifiers=[subnet.id],
+    min_size=0,
+    max_size=1,
+    desired_capacity=desired_capacity,
+    health_check_type="EC2",
+    health_check_grace_period=300,
+    capacity_rebalance=True,
+    metrics_granularity="1Minute",
+    enabled_metrics=["GroupInServiceInstances"],
+    mixed_instances_policy={
+        "instances_distribution": {
+            "on_demand_base_capacity": on_demand_base,
+            "on_demand_percentage_above_base_capacity": 0,
+            "spot_allocation_strategy": "capacity-optimized",
+        },
+        "launch_template": {
+            "launch_template_specification": {
+                "launch_template_id": launch_template.id,
+                "version": "$Latest",
+            },
+            "overrides": [{"instance_type": t} for t in instance_types],
+        },
+    },
+    tags=[
+        {"key": k, "value": v, "propagate_at_launch": True}
+        for k, v in {**tags, "Name": NAME}.items()
+    ],
 )
 
 
@@ -251,15 +314,185 @@ aws.route53.Record(
 )
 
 
-pulumi.export("instance_id", instance.id)
+alerts = aws.sns.Topic(
+    "alerts",
+    name=f"{NAME}-alerts",
+    tags={**tags, "Name": NAME},
+)
+
+aws.sns.TopicPolicy(
+    "alerts-policy",
+    arn=alerts.arn,
+    policy=alerts.arn.apply(
+        lambda arn: json.dumps(
+            {
+                "Version": "2012-10-17",
+                "Statement": [
+                    {
+                        "Effect": "Allow",
+                        "Principal": {
+                            "Service": ["cloudwatch.amazonaws.com", "events.amazonaws.com"]
+                        },
+                        "Action": "sns:Publish",
+                        "Resource": arn,
+                    }
+                ],
+            }
+        )
+    ),
+)
+
+
+aws.cloudwatch.MetricAlarm(
+    "no-capacity",
+    name=f"{NAME}-no-capacity",
+    namespace="AWS/AutoScaling",
+    metric_name="GroupInServiceInstances",
+    dimensions={"AutoScalingGroupName": asg.name},
+    statistic="Maximum",
+    period=60,
+    evaluation_periods=capacity_alarm_periods,
+    threshold=1,
+    comparison_operator="LessThanThreshold",
+    treat_missing_data="breaching",
+    alarm_description="the group has been without a running instance",
+    alarm_actions=[alerts.arn],
+    ok_actions=[alerts.arn],
+    tags={**tags, "Name": NAME},
+)
+
+
+event_log = aws.cloudwatch.LogGroup(
+    "asg-events",
+    name=f"/aws/events/{NAME}",
+    retention_in_days=7,
+    tags={**tags, "Name": NAME},
+)
+
+aws.cloudwatch.LogResourcePolicy(
+    "asg-events-policy",
+    policy_name=f"{NAME}-asg-events",
+    policy_document=event_log.arn.apply(
+        lambda arn: json.dumps(
+            {
+                "Version": "2012-10-17",
+                "Statement": [
+                    {
+                        "Effect": "Allow",
+                        "Principal": {
+                            "Service": ["events.amazonaws.com", "delivery.logs.amazonaws.com"]
+                        },
+                        "Action": ["logs:CreateLogStream", "logs:PutLogEvents"],
+                        "Resource": f"{arn}:*",
+                    }
+                ],
+            }
+        )
+    ),
+)
+
+launch_failed = aws.cloudwatch.EventRule(
+    "launch-failed",
+    name=f"{NAME}-launch-failed",
+    description="the group tried to launch an instance and could not",
+    event_pattern=json.dumps(
+        {
+            "source": ["aws.autoscaling"],
+            "detail-type": ["EC2 Instance Launch Unsuccessful"],
+            "detail": {"AutoScalingGroupName": [NAME]},
+        }
+    ),
+    tags={**tags, "Name": NAME},
+)
+
+aws.cloudwatch.EventTarget(
+    "launch-failed-sns",
+    rule=launch_failed.name,
+    target_id="sns",
+    arn=alerts.arn,
+)
+
+aws.cloudwatch.EventTarget(
+    "launch-failed-log",
+    rule=launch_failed.name,
+    target_id="log",
+    arn=event_log.arn,
+)
+
+
+health_check = aws.route53.HealthCheck(
+    "endpoint",
+    type="HTTPS",
+    fqdn=domain,
+    port=443,
+    resource_path="/",
+    request_interval=30,
+    failure_threshold=3,
+    enable_sni=True,
+    measure_latency=True,
+    tags={**tags, "Name": NAME},
+)
+
+
+health_check_provider = aws.Provider(HEALTH_CHECK_REGION, region=HEALTH_CHECK_REGION)
+
+health_alerts = aws.sns.Topic(
+    "health-alerts",
+    name=f"{NAME}-health-alerts",
+    tags={**tags, "Name": NAME},
+    opts=pulumi.ResourceOptions(provider=health_check_provider),
+)
+
+aws.sns.TopicPolicy(
+    "health-alerts-policy",
+    arn=health_alerts.arn,
+    policy=health_alerts.arn.apply(
+        lambda arn: json.dumps(
+            {
+                "Version": "2012-10-17",
+                "Statement": [
+                    {
+                        "Effect": "Allow",
+                        "Principal": {"Service": "cloudwatch.amazonaws.com"},
+                        "Action": "sns:Publish",
+                        "Resource": arn,
+                    }
+                ],
+            }
+        )
+    ),
+    opts=pulumi.ResourceOptions(provider=health_check_provider),
+)
+
+aws.cloudwatch.MetricAlarm(
+    "endpoint-down",
+    name=f"{NAME}-endpoint-down",
+    namespace="AWS/Route53",
+    metric_name="HealthCheckStatus",
+    dimensions={"HealthCheckId": health_check.id},
+    statistic="Minimum",
+    period=60,
+    evaluation_periods=2,
+    threshold=1,
+    comparison_operator="LessThanThreshold",
+    treat_missing_data="breaching",
+    alarm_description="the endpoint stopped answering health checks",
+    alarm_actions=[health_alerts.arn],
+    ok_actions=[health_alerts.arn],
+    tags={**tags, "Name": NAME},
+    opts=pulumi.ResourceOptions(provider=health_check_provider),
+)
+
+
+pulumi.export("asg_name", asg.name)
 pulumi.export("public_ip", eip.public_ip)
 pulumi.export("domain", domain)
 pulumi.export("dashboard_url", f"https://{domain}")
 pulumi.export("litestream_bucket", litestream_bucket)
 pulumi.export("vpc_id", vpc.id)
 pulumi.export("security_group_id", sg.id)
+pulumi.export("alerts_topic_arn", alerts.arn)
+pulumi.export("health_alerts_topic_arn", health_alerts.arn)
+pulumi.export("health_check_id", health_check.id)
+pulumi.export("asg_event_log_group", event_log.name)
 pulumi.export("ssh", eip.public_ip.apply(lambda ip: f"ssh ec2-user@{ip}"))
-pulumi.export(
-    "ssm",
-    instance.id.apply(lambda i: f"aws ssm start-session --target {i} --region ap-northeast-1"),
-)
