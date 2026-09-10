@@ -10,7 +10,6 @@ SUBNET_CIDR = "10.2.0.0/28"
 AZ = "ap-northeast-1a"
 NAME = "5tmate-netbirdtest"
 AMI_PARAMETER = "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64"
-HEALTH_CHECK_REGION = "us-east-1"
 
 tags = {"App": "5tmate", "ManagedBy": "pulumi"}
 
@@ -420,70 +419,6 @@ aws.cloudwatch.EventTarget(
 )
 
 
-health_check = aws.route53.HealthCheck(
-    "endpoint",
-    type="HTTPS",
-    fqdn=domain,
-    port=443,
-    resource_path="/oauth2",
-    request_interval=30,
-    failure_threshold=3,
-    enable_sni=True,
-    measure_latency=True,
-    tags={**tags, "Name": NAME},
-)
-
-
-health_check_provider = aws.Provider(HEALTH_CHECK_REGION, region=HEALTH_CHECK_REGION)
-
-health_alerts = aws.sns.Topic(
-    "health-alerts",
-    name=f"{NAME}-health-alerts",
-    tags={**tags, "Name": NAME},
-    opts=pulumi.ResourceOptions(provider=health_check_provider),
-)
-
-aws.sns.TopicPolicy(
-    "health-alerts-policy",
-    arn=health_alerts.arn,
-    policy=health_alerts.arn.apply(
-        lambda arn: json.dumps(
-            {
-                "Version": "2012-10-17",
-                "Statement": [
-                    {
-                        "Effect": "Allow",
-                        "Principal": {"Service": "cloudwatch.amazonaws.com"},
-                        "Action": "sns:Publish",
-                        "Resource": arn,
-                    }
-                ],
-            }
-        )
-    ),
-    opts=pulumi.ResourceOptions(provider=health_check_provider),
-)
-
-aws.cloudwatch.MetricAlarm(
-    "endpoint-down",
-    name=f"{NAME}-endpoint-down",
-    namespace="AWS/Route53",
-    metric_name="HealthCheckStatus",
-    dimensions={"HealthCheckId": health_check.id},
-    statistic="Minimum",
-    period=60,
-    evaluation_periods=2,
-    threshold=1,
-    comparison_operator="LessThanThreshold",
-    treat_missing_data="breaching",
-    alarm_description="the endpoint stopped answering health checks",
-    alarm_actions=[health_alerts.arn],
-    ok_actions=[health_alerts.arn],
-    tags={**tags, "Name": NAME},
-    opts=pulumi.ResourceOptions(provider=health_check_provider),
-)
-
-
 pulumi.export("asg_name", asg.name)
 pulumi.export("public_ip", eip.public_ip)
 pulumi.export("domain", domain)
@@ -492,7 +427,5 @@ pulumi.export("litestream_bucket", litestream_bucket)
 pulumi.export("vpc_id", vpc.id)
 pulumi.export("security_group_id", sg.id)
 pulumi.export("alerts_topic_arn", alerts.arn)
-pulumi.export("health_alerts_topic_arn", health_alerts.arn)
-pulumi.export("health_check_id", health_check.id)
 pulumi.export("asg_event_log_group", event_log.name)
 pulumi.export("ssh", eip.public_ip.apply(lambda ip: f"ssh ec2-user@{ip}"))
