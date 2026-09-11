@@ -1,3 +1,4 @@
+import logging
 import os
 import ssl
 import time
@@ -16,6 +17,9 @@ TOPIC_ARN = os.environ["TOPIC_ARN"]
 
 TAKEOVER = "/usr/local/bin/netbird-takeover"
 STANDDOWN = "/usr/local/bin/netbird-standdown"
+
+log = logging.getLogger()
+log.setLevel(logging.INFO)
 
 asg = boto3.client("autoscaling")
 ec2 = boto3.client("ec2")
@@ -74,8 +78,11 @@ def set_desired(count):
 def wait_asg_empty(context, budget):
     deadline = time.time() + min(budget, remaining(context) - 60)
     while time.time() < deadline:
-        if not asg_instance_ids():
+        left = asg_instance_ids()
+        if not left:
+            log.info("the group is empty")
             return
+        log.info("waiting for %s to go away", left)
         time.sleep(10)
     raise Failed("the group still has instances after waiting")
 
@@ -93,10 +100,13 @@ def healthy():
 
 def wait_healthy(context, budget):
     deadline = time.time() + min(budget, remaining(context) - 60)
+    started = time.time()
     while time.time() < deadline:
         if healthy():
+            log.info("%s answered after %ds", DOMAIN, time.time() - started)
             return True
         time.sleep(10)
+    log.error("%s never answered", DOMAIN)
     return False
 
 
@@ -108,6 +118,7 @@ def run(instance_id, script, context, budget):
         TimeoutSeconds=600,
     )
     command_id = sent["Command"]["CommandId"]
+    log.info("running %s on %s as %s", script, instance_id, command_id)
     deadline = time.time() + min(budget, remaining(context) - 45)
     while time.time() < deadline:
         time.sleep(5)
@@ -118,6 +129,7 @@ def run(instance_id, script, context, budget):
         if result["Status"] in ("Pending", "InProgress", "Delayed"):
             continue
         if result["Status"] == "Success":
+            log.info("%s on %s finished", script, instance_id)
             return result["StandardOutputContent"]
         raise Failed(
             f"{script} on {instance_id} ended as {result['Status']}: "
@@ -136,15 +148,18 @@ def fail_over(context):
             set_desired(1)
         return f"standby {instance_id} is already {state}, nothing to do"
 
+    log.info("fencing the group, standby %s is %s", instance_id, state)
     set_desired(0)
     wait_asg_empty(context, budget=240)
 
+    log.info("starting standby %s", instance_id)
     ec2.start_instances(InstanceIds=[instance_id])
     ec2.get_waiter("instance_running").wait(
         InstanceIds=[instance_id], WaiterConfig={"Delay": 10, "MaxAttempts": 30}
     )
 
     served = wait_healthy(context, budget=420)
+    log.info("unfencing the group")
     set_desired(1)
     if not served:
         raise Failed(f"standby {instance_id} started but {DOMAIN} is not serving")
@@ -160,6 +175,7 @@ def fail_back(context):
     if not primary:
         return "no instance in service, staying on the standby"
     primary_id = primary[0]
+    log.info("handing %s back from standby %s", primary_id, instance_id)
 
     run(instance_id, STANDDOWN, context, budget=180)
 
@@ -168,9 +184,11 @@ def fail_back(context):
         if not wait_healthy(context, budget=180):
             raise Failed(f"{primary_id} took over but {DOMAIN} is not serving")
     except Failed as e:
+        log.error("takeover failed, rolling back: %s", e)
         roll_back(instance_id, primary_id, context)
         raise Failed(f"{e}. rolled back to the standby")
 
+    log.info("stopping standby %s", instance_id)
     ec2.stop_instances(InstanceIds=[instance_id])
     return f"switched back to {primary_id}, standby {instance_id} stopping"
 
@@ -193,6 +211,8 @@ def handler(event, context):
     name = detail.get("alarmName")
     state = detail.get("state", {}).get("value")
 
+    log.info("alarm %s is %s", name, state)
+
     if state != "ALARM":
         return {"skipped": f"state is {state}"}
 
@@ -206,9 +226,11 @@ def handler(event, context):
     try:
         outcome = run_it(context)
     except Exception as e:
+        log.exception("%s failed", action)
         notify(f"netbird {action} failed", f"{type(e).__name__}: {e}")
         raise
 
+    log.info("%s: %s", action, outcome)
     if not outcome.endswith("nothing to do"):
         notify(f"netbird {action}", outcome)
     return {"action": action, "outcome": outcome}
