@@ -253,21 +253,21 @@ aws.iam.RolePolicy(
 _user_data = (Path(__file__).parent / "files" / "user_data.sh").read_text()
 
 
-def render_user_data(eip_allocation_id, claim_eip):
+def render_user_data(eip_allocation_id, role):
     return (
         _user_data.replace("__BUCKET__", litestream_bucket)
         .replace("__REGION__", region)
         .replace("__CLUSTER__", NAME)
         .replace("__EIP_ALLOC__", eip_allocation_id)
         .replace("__LITESTREAM_IMAGE__", litestream_image)
-        .replace("__CLAIM_EIP__", claim_eip)
+        .replace("__ROLE__", role)
         .replace("__NB_DIR__", NB_DIR)
         .replace("__STANDBY_NAME__", STANDBY_NAME)
     )
 
 
-user_data = eip.id.apply(lambda i: render_user_data(i, "yes"))
-standby_user_data = eip.id.apply(lambda i: render_user_data(i, "no"))
+user_data = eip.id.apply(lambda i: render_user_data(i, "primary"))
+standby_user_data = eip.id.apply(lambda i: render_user_data(i, "standby"))
 
 
 launch_template = aws.ec2.LaunchTemplate(

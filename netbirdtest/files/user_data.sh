@@ -6,7 +6,7 @@ REGION=__REGION__
 CLUSTER=__CLUSTER__
 EIP_ALLOC=__EIP_ALLOC__
 LITESTREAM_IMAGE=__LITESTREAM_IMAGE__
-CLAIM_EIP=__CLAIM_EIP__
+ROLE=__ROLE__
 STANDBY_NAME=__STANDBY_NAME__
 NB_DIR=__NB_DIR__
 
@@ -18,7 +18,7 @@ BUCKET=${BUCKET}
 REGION=${REGION}
 EIP_ALLOC=${EIP_ALLOC}
 LITESTREAM_IMAGE=${LITESTREAM_IMAGE}
-CLAIM_EIP=${CLAIM_EIP}
+ROLE=${ROLE}
 STANDBY_NAME=${STANDBY_NAME}
 NB_DIR=${NB_DIR}
 PREPARE
@@ -74,7 +74,7 @@ for db in store idp events; do
     -integrity-check full -force "/var/lib/netbird/${db}.db"
 done
 
-if [ "$CLAIM_EIP" = "yes" ] && [ -z "$(standby_state)" ]; then
+if [ "$ROLE" = "primary" ] && [ -z "$(standby_state)" ]; then
   aws ec2 associate-address --allocation-id "$EIP_ALLOC" \
     --instance-id "$(imds instance-id)" --allow-reassociation --region "$REGION"
 fi
@@ -112,6 +112,6 @@ systemctl enable netbird-prepare.service
 systemctl start netbird-prepare.service
 systemctl restart ecs
 
-if [ "$CLAIM_EIP" = "no" ]; then
+if [ "$ROLE" = "standby" ]; then
   shutdown -h +1
 fi
