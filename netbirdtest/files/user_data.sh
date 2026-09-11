@@ -110,7 +110,6 @@ grep -q "^ECS_CLUSTER=" /etc/ecs/ecs.config 2>/dev/null || echo "ECS_CLUSTER=${C
 systemctl daemon-reload
 systemctl enable netbird-prepare.service
 systemctl start netbird-prepare.service
-systemctl restart ecs
 
 if [ "$ROLE" = "standby" ]; then
   shutdown -h +1

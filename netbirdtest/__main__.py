@@ -181,6 +181,12 @@ aws.iam.RolePolicyAttachment(
     policy_arn="arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore",
 )
 
+aws.iam.RolePolicyAttachment(
+    "ecs-container-instance",
+    role=ssm_role.name,
+    policy_arn="arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role",
+)
+
 instance_profile = aws.iam.InstanceProfile(
     "instance-profile",
     role=ssm_role.name,
