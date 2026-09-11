@@ -19,8 +19,6 @@ tags = {"App": "5tmate", "ManagedBy": "pulumi"}
 
 config = pulumi.Config()
 zone_name = config.require("zone_name")
-allowed_ssh_cidr = config.require("allowed_ssh_cidr")
-ssh_public_key = config.require("ssh_public_key")
 hostname = config.get("hostname") or "netbirdtest"
 letsencrypt_email = config.get("letsencrypt_email") or f"admin@{zone_name}"
 litestream_version = config.get("litestream_version") or "0.5.17"
@@ -137,13 +135,6 @@ sg = aws.ec2.SecurityGroup(
             "to_port": 3478,
             "cidr_blocks": ["0.0.0.0/0"],
         },
-        {
-            "description": "SSH from operator IP",
-            "protocol": "tcp",
-            "from_port": 22,
-            "to_port": 22,
-            "cidr_blocks": [allowed_ssh_cidr],
-        },
     ],
     egress=[
         {
@@ -218,12 +209,6 @@ aws.iam.RolePolicy(
     ),
 )
 
-key_pair = aws.ec2.KeyPair(
-    "key",
-    public_key=ssh_public_key,
-    tags={**tags, "Name": NAME},
-)
-
 ami = aws.ssm.get_parameter(name=AMI_PARAMETER).value
 region = aws.get_region().name
 
@@ -280,7 +265,6 @@ launch_template = aws.ec2.LaunchTemplate(
     "lt",
     name_prefix=f"{NAME}-",
     image_id=ami,
-    key_name=key_pair.key_name,
     vpc_security_group_ids=[sg.id],
     iam_instance_profile={"arn": instance_profile.arn},
     metadata_options={
@@ -632,7 +616,6 @@ standby = aws.ec2.Instance(
     subnet_id=standby_subnet.id,
     vpc_security_group_ids=[sg.id],
     iam_instance_profile=instance_profile.name,
-    key_name=key_pair.key_name,
     user_data=standby_user_data,
     user_data_replace_on_change=False,
     metadata_options={"http_endpoint": "enabled", "http_tokens": "required"},
@@ -942,4 +925,3 @@ pulumi.export("security_group_id", sg.id)
 pulumi.export("alerts_topic_arn", alerts.arn)
 pulumi.export("failover_function", failover.name)
 pulumi.export("asg_event_log_group", event_log.name)
-pulumi.export("ssh", eip.public_ip.apply(lambda ip: f"ssh ec2-user@{ip}"))
