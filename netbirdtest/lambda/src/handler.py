@@ -134,6 +134,26 @@ def set_state(container_instance_arn, state):
     )
 
 
+def place_eip(event):
+    detail = event.get("detail", {})
+    arn = detail.get("containerInstanceArn")
+    if not arn:
+        return "the event carries no container instance, nothing to do"
+
+    hosts = ecs.describe_container_instances(cluster=CLUSTER, containerInstances=[arn])[
+        "containerInstances"
+    ]
+    if not hosts:
+        return f"{arn} is no longer in the cluster, nothing to do"
+
+    instance_id = hosts[0]["ec2InstanceId"]
+    if eip_holder() == instance_id:
+        return f"the elastic ip is already on {instance_id}, nothing to do"
+
+    claim_eip(instance_id)
+    return f"moved the elastic ip to {instance_id}"
+
+
 def fail_over(context):
     instance_id, state = standby_instance()
     if instance_id is None:
@@ -216,6 +236,12 @@ def fail_back(context):
 
 
 def handler(event, context):
+    if event.get("detail-type") == "ECS Task State Change":
+        log.info("a task reached %s", event.get("detail", {}).get("lastStatus"))
+        outcome = place_eip(event)
+        log.info("eip: %s", outcome)
+        return {"action": "eip", "outcome": outcome}
+
     detail = event.get("detail", {})
     name = detail.get("alarmName")
     state = detail.get("state", {}).get("value")

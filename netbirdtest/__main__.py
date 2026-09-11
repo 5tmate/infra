@@ -210,14 +210,8 @@ aws.s3.BucketServerSideEncryptionConfigurationV2(
 )
 
 _secrets = {
-    name: random.RandomPassword(
-        name, length=length, special=False, opts=pulumi.ResourceOptions(protect=True)
-    )
-    for name, length in (
-        ("auth-secret", 43),
-        ("session-key", 44),
-        ("store-encryption-key", 44),
-    )
+    name: random.RandomBytes(name, length=32, opts=pulumi.ResourceOptions(protect=True))
+    for name in ("auth-secret", "session-key", "store-encryption-key")
 }
 
 _config_template = (Path(__file__).parent / "files" / "config.yaml").read_text()
@@ -227,9 +221,9 @@ netbird_config = aws.s3.BucketObject(
     bucket=backup_bucket.id,
     key="config/config.yaml",
     content=pulumi.Output.all(
-        _secrets["auth-secret"].result,
-        _secrets["session-key"].result,
-        _secrets["store-encryption-key"].result,
+        _secrets["auth-secret"].base64,
+        _secrets["session-key"].base64,
+        _secrets["store-encryption-key"].base64,
     ).apply(
         lambda v: (
             _config_template.replace("__DOMAIN__", domain)
@@ -238,7 +232,7 @@ netbird_config = aws.s3.BucketObject(
             .replace("__ENCRYPTION_KEY__", v[2])
         )
     ),
-    opts=pulumi.ResourceOptions(ignore_changes=["content"]),
+    opts=pulumi.ResourceOptions(ignore_changes=["content"], delete_before_replace=True),
 )
 
 backup_access = aws.iam.RolePolicy(
@@ -276,7 +270,7 @@ eip = aws.ec2.Eip(
 )
 
 aws.iam.RolePolicy(
-    "eip-and-peer",
+    "describe-peer",
     role=ssm_role.name,
     policy=json.dumps(
         {
@@ -284,11 +278,7 @@ aws.iam.RolePolicy(
             "Statement": [
                 {
                     "Effect": "Allow",
-                    "Action": [
-                        "ec2:AssociateAddress",
-                        "ec2:DescribeAddresses",
-                        "ec2:DescribeInstances",
-                    ],
+                    "Action": "ec2:DescribeInstances",
                     "Resource": "*",
                 }
             ],
@@ -300,21 +290,19 @@ aws.iam.RolePolicy(
 _user_data = (Path(__file__).parent / "files" / "user_data.sh").read_text()
 
 
-def render_user_data(eip_allocation_id, role):
+def render_user_data(role):
     return (
         _user_data.replace("__BUCKET__", BACKUP_BUCKET)
         .replace("__REGION__", region)
         .replace("__CLUSTER__", NAME)
-        .replace("__EIP_ALLOC__", eip_allocation_id)
         .replace("__LITESTREAM_IMAGE__", litestream_image)
         .replace("__ROLE__", role)
         .replace("__NB_DIR__", NB_DIR)
-        .replace("__STANDBY_NAME__", STANDBY_NAME)
     )
 
 
-user_data = eip.id.apply(lambda i: render_user_data(i, "primary"))
-standby_user_data = eip.id.apply(lambda i: render_user_data(i, "standby"))
+user_data = render_user_data("primary")
+standby_user_data = render_user_data("standby")
 
 
 launch_template = aws.ec2.LaunchTemplate(
@@ -338,7 +326,7 @@ launch_template = aws.ec2.LaunchTemplate(
             },
         }
     ],
-    user_data=user_data.apply(lambda t: base64.b64encode(t.encode()).decode()),
+    user_data=base64.b64encode(user_data.encode()).decode(),
     update_default_version=True,
     opts=pulumi.ResourceOptions(depends_on=[netbird_config, backup_access]),
     tag_specifications=[
@@ -970,6 +958,41 @@ aws.cloudwatch.EventTarget(
     rule=alarm_events.name,
     target_id="failover",
     arn=failover.arn,
+)
+
+task_events = aws.cloudwatch.EventRule(
+    "task-events",
+    name=f"{NAME}-task-events",
+    description="a task of this service reaching RUNNING",
+    event_pattern=cluster.arn.apply(
+        lambda arn: json.dumps(
+            {
+                "source": ["aws.ecs"],
+                "detail-type": ["ECS Task State Change"],
+                "detail": {
+                    "clusterArn": [arn],
+                    "group": [f"service:{NAME}"],
+                    "lastStatus": ["RUNNING"],
+                },
+            }
+        )
+    ),
+    tags={**tags, "Name": NAME},
+)
+
+aws.cloudwatch.EventTarget(
+    "task-events-lambda",
+    rule=task_events.name,
+    target_id="failover",
+    arn=failover.arn,
+)
+
+aws.lambda_.Permission(
+    "task-events-invoke",
+    action="lambda:InvokeFunction",
+    function=failover.name,
+    principal="events.amazonaws.com",
+    source_arn=task_events.arn,
 )
 
 aws.lambda_.Permission(

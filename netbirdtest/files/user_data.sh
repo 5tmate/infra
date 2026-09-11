@@ -4,10 +4,8 @@ set -euxo pipefail
 BUCKET=__BUCKET__
 REGION=__REGION__
 CLUSTER=__CLUSTER__
-EIP_ALLOC=__EIP_ALLOC__
 LITESTREAM_IMAGE=__LITESTREAM_IMAGE__
 ROLE=__ROLE__
-STANDBY_NAME=__STANDBY_NAME__
 NB_DIR=__NB_DIR__
 
 cat > /usr/local/bin/netbird-prepare <<PREPARE
@@ -16,41 +14,15 @@ set -euxo pipefail
 
 BUCKET=${BUCKET}
 REGION=${REGION}
-EIP_ALLOC=${EIP_ALLOC}
 LITESTREAM_IMAGE=${LITESTREAM_IMAGE}
 ROLE=${ROLE}
-STANDBY_NAME=${STANDBY_NAME}
 NB_DIR=${NB_DIR}
 PREPARE
 
 cat >> /usr/local/bin/netbird-prepare <<'PREPARE'
 
-imds() {
-  local token
-  token=$(curl -sX PUT http://169.254.169.254/latest/api/token \
-    -H "X-aws-ec2-metadata-token-ttl-seconds: 60")
-  curl -s -H "X-aws-ec2-metadata-token: $token" \
-    "http://169.254.169.254/latest/meta-data/$1"
-}
-
-standby_is_serving() {
-  local out
-  if ! out=$(aws ec2 describe-instances --region "$REGION" \
-      --filters "Name=tag:Name,Values=${STANDBY_NAME}" \
-                "Name=instance-state-name,Values=pending,running,stopping" \
-      --query 'Reservations[].Instances[].State.Name' --output text 2>/dev/null); then
-    return 0
-  fi
-  [ -n "$out" ]
-}
-
-claim_eip() {
-  aws ec2 associate-address --allocation-id "$EIP_ALLOC" \
-    --instance-id "$(imds instance-id)" --allow-reassociation --region "$REGION"
-}
-
 have_replica() {
-  aws s3 ls "s3://${BUCKET}/store/" --region "$REGION" >/dev/null 2>&1
+  aws s3 ls "s3://${BUCKET}/$1/" --region "$REGION" >/dev/null 2>&1
 }
 
 install -d "${NB_DIR}/data" "${NB_DIR}/letsencrypt"
@@ -79,19 +51,14 @@ dbs:
       region: ${REGION}
 YML
 
-if have_replica; then
-  for db in store idp events; do
-    docker run --rm \
-      -v "${NB_DIR}/data:/var/lib/netbird" \
-      -v "${NB_DIR}/litestream.yml:/etc/litestream.yml:ro" \
-      "$LITESTREAM_IMAGE" restore -config /etc/litestream.yml \
-      -integrity-check full -force "/var/lib/netbird/${db}.db"
-  done
-fi
-
-if [ "$ROLE" = "primary" ] && ! standby_is_serving; then
-  claim_eip
-fi
+for db in store idp events; do
+  have_replica "$db" || continue
+  docker run --rm \
+    -v "${NB_DIR}/data:/var/lib/netbird" \
+    -v "${NB_DIR}/litestream.yml:/etc/litestream.yml:ro" \
+    "$LITESTREAM_IMAGE" restore -config /etc/litestream.yml \
+    -integrity-check full -force "/var/lib/netbird/${db}.db"
+done
 PREPARE
 chmod +x /usr/local/bin/netbird-prepare
 
