@@ -200,7 +200,7 @@ eip = aws.ec2.Eip(
 )
 
 aws.iam.RolePolicy(
-    "eip-associate",
+    "eip-and-peer",
     role=ssm_role.name,
     policy=json.dumps(
         {
@@ -208,7 +208,11 @@ aws.iam.RolePolicy(
             "Statement": [
                 {
                     "Effect": "Allow",
-                    "Action": ["ec2:AssociateAddress", "ec2:DescribeAddresses"],
+                    "Action": [
+                        "ec2:AssociateAddress",
+                        "ec2:DescribeAddresses",
+                        "ec2:DescribeInstances",
+                    ],
                     "Resource": "*",
                 }
             ],
@@ -228,6 +232,7 @@ user_data = pulumi.Output.all(eip.id, eip.public_ip).apply(
         .replace("__LITESTREAM_VERSION__", litestream_version)
         .replace("__EIP_ALLOC__", a[0])
         .replace("__EIP_ADDR__", a[1])
+        .replace("__STANDBY_NAME__", f"{NAME}-standby")
     )
 )
 
