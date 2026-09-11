@@ -2,3 +2,6 @@
 **/__pycache__/
 **/*.pyc
 **/.pulumi/
+**/lambda/build/
+**/lambda/dist/
+**/.ruff_cache/
