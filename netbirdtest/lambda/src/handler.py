@@ -185,10 +185,16 @@ def fail_back(context):
         if not wait_healthy(context, budget=180):
             raise Failed(f"the task moved to {primary_id} but {DOMAIN} is silent")
     except Failed as e:
-        log.error("handing back failed, undraining the standby: %s", e)
+        log.error("handing back failed, pushing the task onto the standby again: %s", e)
         set_state(standby_arn, "ACTIVE")
-        claim_eip(instance_id)
-        raise Failed(f"{e}. left the task on the standby")
+        primary_arn = primary[0]["containerInstanceArn"]
+        set_state(primary_arn, "DRAINING")
+        try:
+            wait_task_on(context, standby_arn, budget=240)
+            claim_eip(instance_id)
+        finally:
+            set_state(primary_arn, "ACTIVE")
+        raise Failed(f"{e}. rolled the task back onto the standby")
 
     log.info("stopping standby %s", instance_id)
     ec2.stop_instances(InstanceIds=[instance_id])

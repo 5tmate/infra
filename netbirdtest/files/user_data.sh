@@ -2,13 +2,28 @@
 set -euxo pipefail
 
 BUCKET=__BUCKET__
-STANDBY_NAME=__STANDBY_NAME__
 REGION=__REGION__
 CLUSTER=__CLUSTER__
 EIP_ALLOC=__EIP_ALLOC__
 LITESTREAM_IMAGE=__LITESTREAM_IMAGE__
 CLAIM_EIP=__CLAIM_EIP__
+STANDBY_NAME=__STANDBY_NAME__
 NB_DIR=__NB_DIR__
+
+cat > /usr/local/bin/netbird-prepare <<PREPARE
+#!/bin/bash
+set -euxo pipefail
+
+BUCKET=${BUCKET}
+REGION=${REGION}
+EIP_ALLOC=${EIP_ALLOC}
+LITESTREAM_IMAGE=${LITESTREAM_IMAGE}
+CLAIM_EIP=${CLAIM_EIP}
+STANDBY_NAME=${STANDBY_NAME}
+NB_DIR=${NB_DIR}
+PREPARE
+
+cat >> /usr/local/bin/netbird-prepare <<'PREPARE'
 
 imds() {
   local token
@@ -16,6 +31,13 @@ imds() {
     -H "X-aws-ec2-metadata-token-ttl-seconds: 60")
   curl -s -H "X-aws-ec2-metadata-token: $token" \
     "http://169.254.169.254/latest/meta-data/$1"
+}
+
+standby_state() {
+  aws ec2 describe-instances --region "$REGION" \
+    --filters "Name=tag:Name,Values=${STANDBY_NAME}" \
+              "Name=instance-state-name,Values=pending,running,stopping" \
+    --query 'Reservations[].Instances[].State.Name' --output text
 }
 
 install -d "${NB_DIR}/data" "${NB_DIR}/letsencrypt"
@@ -52,17 +74,44 @@ for db in store idp events; do
     -integrity-check full -force "/var/lib/netbird/${db}.db"
 done
 
-standby_state() {
-  aws ec2 describe-instances --region "$REGION" \
-    --filters "Name=tag:Name,Values=${STANDBY_NAME}" \
-              "Name=instance-state-name,Values=pending,running,stopping" \
-    --query 'Reservations[].Instances[].State.Name' --output text
-}
-
 if [ "$CLAIM_EIP" = "yes" ] && [ -z "$(standby_state)" ]; then
   aws ec2 associate-address --allocation-id "$EIP_ALLOC" \
     --instance-id "$(imds instance-id)" --allow-reassociation --region "$REGION"
 fi
+PREPARE
+chmod +x /usr/local/bin/netbird-prepare
 
-echo "ECS_CLUSTER=${CLUSTER}" >> /etc/ecs/ecs.config
-systemctl enable --now ecs
+cat > /etc/systemd/system/netbird-prepare.service <<'UNIT'
+[Unit]
+Description=Restore NetBird state from S3 before the ECS agent joins the cluster
+After=docker.service network-online.target
+Requires=docker.service
+Before=ecs.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/netbird-prepare
+TimeoutStartSec=600
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+install -d /etc/systemd/system/ecs.service.d
+cat > /etc/systemd/system/ecs.service.d/after-prepare.conf <<'UNIT'
+[Unit]
+After=netbird-prepare.service
+Requires=netbird-prepare.service
+UNIT
+
+grep -q "^ECS_CLUSTER=" /etc/ecs/ecs.config 2>/dev/null || echo "ECS_CLUSTER=${CLUSTER}" >> /etc/ecs/ecs.config
+
+systemctl daemon-reload
+systemctl enable netbird-prepare.service
+systemctl start netbird-prepare.service
+systemctl restart ecs
+
+if [ "$CLAIM_EIP" = "no" ]; then
+  shutdown -h +1
+fi
