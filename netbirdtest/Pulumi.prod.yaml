@@ -2,8 +2,6 @@ config:
   aws:region: ap-northeast-1
   5tmate-netbirdtest:zone_name: 5tmate.threatreveal.org
   5tmate-netbirdtest:hostname: netbirdtest
-  5tmate-netbirdtest:instance_type: t3.small
-  5tmate-netbirdtest:litestream_bucket: 5tmate-netbirdtest-backup
   5tmate-netbirdtest:desired_capacity: "1"
   5tmate-netbirdtest:on_demand_base: "1"
 encryptionsalt: v1:j8m5Cxl0OKk=:v1:9KiI79pGZokz/trq:zzUuAOItnwmyCxafRdjljNwHHhHZuQ==

@@ -12,6 +12,7 @@ AZ = "ap-northeast-1a"
 STANDBY_AZ = "ap-northeast-1c"
 NAME = "5tmate-netbirdtest"
 STANDBY_NAME = f"{NAME}-standby"
+BACKUP_BUCKET = f"{NAME}-backup"
 NB_DIR = "/opt/netbird"
 AMI_PARAMETER = "/aws/service/ecs/optimized-ami/amazon-linux-2023/arm64/recommended/image_id"
 
@@ -22,7 +23,7 @@ zone_name = config.require("zone_name")
 hostname = config.get("hostname") or "netbirdtest"
 letsencrypt_email = config.get("letsencrypt_email") or f"admin@{zone_name}"
 litestream_version = config.get("litestream_version") or "0.5.17"
-litestream_bucket = config.require("litestream_bucket")
+backup_force_destroy = config.get_bool("backup_force_destroy") or False
 root_volume_size = config.get_int("root_volume_size") or 30
 instance_types = config.get_object("instance_types") or [
     "t4g.small",
@@ -185,27 +186,49 @@ instance_profile = aws.iam.InstanceProfile(
 )
 
 
-backup_bucket = aws.s3.get_bucket(bucket=litestream_bucket)
+backup_bucket = aws.s3.Bucket(
+    "backup",
+    bucket=BACKUP_BUCKET,
+    force_destroy=backup_force_destroy,
+    tags={**tags, "Name": BACKUP_BUCKET, "Purpose": "litestream-backup"},
+)
+
+aws.s3.BucketPublicAccessBlock(
+    "backup-private",
+    bucket=backup_bucket.id,
+    block_public_acls=True,
+    block_public_policy=True,
+    ignore_public_acls=True,
+    restrict_public_buckets=True,
+)
+
+aws.s3.BucketServerSideEncryptionConfigurationV2(
+    "backup-encryption",
+    bucket=backup_bucket.id,
+    rules=[{"apply_server_side_encryption_by_default": {"sse_algorithm": "AES256"}}],
+)
 
 aws.iam.RolePolicy(
     "litestream-s3",
     role=ssm_role.name,
-    policy=json.dumps(
-        {
-            "Version": "2012-10-17",
-            "Statement": [
-                {
-                    "Effect": "Allow",
-                    "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
-                    "Resource": f"{backup_bucket.arn}/*",
-                },
-                {
-                    "Effect": "Allow",
-                    "Action": ["s3:ListBucket", "s3:GetBucketLocation"],
-                    "Resource": backup_bucket.arn,
-                },
-            ],
-        }
+    policy=backup_bucket.arn.apply(
+        lambda arn: json.dumps(
+            {
+                "Version": "2012-10-17",
+                "Statement": [
+                    {
+                        "Effect": "Allow",
+                        "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+                        "Resource": f"{arn}/*",
+                    },
+                    {
+                        "Effect": "Allow",
+                        "Action": ["s3:ListBucket", "s3:GetBucketLocation"],
+                        "Resource": arn,
+                    },
+                ],
+            }
+        )
     ),
 )
 
@@ -246,7 +269,9 @@ _user_data = (Path(__file__).parent / "files" / "user_data.sh").read_text()
 
 def render_user_data(eip_allocation_id, role):
     return (
-        _user_data.replace("__BUCKET__", litestream_bucket)
+        _user_data.replace("__BUCKET__", BACKUP_BUCKET)
+        .replace("__DOMAIN__", domain)
+        .replace("__LE_EMAIL__", letsencrypt_email)
         .replace("__REGION__", region)
         .replace("__CLUSTER__", NAME)
         .replace("__EIP_ALLOC__", eip_allocation_id)
@@ -382,22 +407,24 @@ aws.iam.RolePolicyAttachment(
 aws.iam.RolePolicy(
     "ecs-execution-envfile",
     role=execution_role.name,
-    policy=json.dumps(
-        {
-            "Version": "2012-10-17",
-            "Statement": [
-                {
-                    "Effect": "Allow",
-                    "Action": "s3:GetObject",
-                    "Resource": f"{backup_bucket.arn}/config/*",
-                },
-                {
-                    "Effect": "Allow",
-                    "Action": "s3:GetBucketLocation",
-                    "Resource": backup_bucket.arn,
-                },
-            ],
-        }
+    policy=backup_bucket.arn.apply(
+        lambda arn: json.dumps(
+            {
+                "Version": "2012-10-17",
+                "Statement": [
+                    {
+                        "Effect": "Allow",
+                        "Action": "s3:GetObject",
+                        "Resource": f"{arn}/config/*",
+                    },
+                    {
+                        "Effect": "Allow",
+                        "Action": "s3:GetBucketLocation",
+                        "Resource": arn,
+                    },
+                ],
+            }
+        )
     ),
 )
 
@@ -422,22 +449,24 @@ task_role = aws.iam.Role(
 aws.iam.RolePolicy(
     "ecs-task-litestream",
     role=task_role.name,
-    policy=json.dumps(
-        {
-            "Version": "2012-10-17",
-            "Statement": [
-                {
-                    "Effect": "Allow",
-                    "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
-                    "Resource": f"{backup_bucket.arn}/*",
-                },
-                {
-                    "Effect": "Allow",
-                    "Action": ["s3:ListBucket", "s3:GetBucketLocation"],
-                    "Resource": backup_bucket.arn,
-                },
-            ],
-        }
+    policy=backup_bucket.arn.apply(
+        lambda arn: json.dumps(
+            {
+                "Version": "2012-10-17",
+                "Statement": [
+                    {
+                        "Effect": "Allow",
+                        "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+                        "Resource": f"{arn}/*",
+                    },
+                    {
+                        "Effect": "Allow",
+                        "Action": ["s3:ListBucket", "s3:GetBucketLocation"],
+                        "Resource": arn,
+                    },
+                ],
+            }
+        )
     ),
 )
 
@@ -463,119 +492,128 @@ backend_paths = (
     "|| PathPrefix(`/api`) || PathPrefix(`/oauth2`)"
 )
 
-containers = [
-    {
-        "name": "traefik",
-        "image": traefik_image,
-        "essential": True,
-        "memoryReservation": 128,
-        "command": [
-            "--log.level=INFO",
-            "--accesslog=true",
-            "--providers.docker=true",
-            "--providers.docker.exposedbydefault=false",
-            "--entrypoints.web.address=:80",
-            "--entrypoints.websecure.address=:443",
-            "--entrypoints.websecure.allowACMEByPass=true",
-            "--entrypoints.websecure.transport.respondingTimeouts.readTimeout=0",
-            "--entrypoints.websecure.transport.respondingTimeouts.writeTimeout=0",
-            "--entrypoints.websecure.transport.respondingTimeouts.idleTimeout=0",
-            "--entrypoints.web.http.redirections.entrypoint.to=websecure",
-            "--entrypoints.web.http.redirections.entrypoint.scheme=https",
-            f"--certificatesresolvers.letsencrypt.acme.email={letsencrypt_email}",
-            "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json",
-            "--certificatesresolvers.letsencrypt.acme.tlschallenge=true",
-            "--serverstransport.forwardingtimeouts.responseheadertimeout=0s",
-            "--serverstransport.forwardingtimeouts.idleconntimeout=0s",
-        ],
-        "portMappings": [
-            {"containerPort": 80, "hostPort": 80, "protocol": "tcp"},
-            {"containerPort": 443, "hostPort": 443, "protocol": "tcp"},
-        ],
-        "mountPoints": [
-            {"sourceVolume": "letsencrypt", "containerPath": "/letsencrypt"},
+
+grpc_rule = f"Host(`{domain}`) && ({grpc_paths})"
+backend_rule = f"Host(`{domain}`) && ({backend_paths})"
+
+
+def container_definitions(arn):
+    return json.dumps(
+        [
             {
-                "sourceVolume": "docker-socket",
-                "containerPath": "/var/run/docker.sock",
-                "readOnly": True,
+                "name": "traefik",
+                "image": traefik_image,
+                "essential": True,
+                "memoryReservation": 128,
+                "command": [
+                    "--log.level=INFO",
+                    "--accesslog=true",
+                    "--providers.docker=true",
+                    "--providers.docker.exposedbydefault=false",
+                    "--entrypoints.web.address=:80",
+                    "--entrypoints.websecure.address=:443",
+                    "--entrypoints.websecure.allowACMEByPass=true",
+                    "--entrypoints.websecure.transport.respondingTimeouts.readTimeout=0",
+                    "--entrypoints.websecure.transport.respondingTimeouts.writeTimeout=0",
+                    "--entrypoints.websecure.transport.respondingTimeouts.idleTimeout=0",
+                    "--entrypoints.web.http.redirections.entrypoint.to=websecure",
+                    "--entrypoints.web.http.redirections.entrypoint.scheme=https",
+                    f"--certificatesresolvers.letsencrypt.acme.email={letsencrypt_email}",
+                    "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json",
+                    "--certificatesresolvers.letsencrypt.acme.tlschallenge=true",
+                    "--serverstransport.forwardingtimeouts.responseheadertimeout=0s",
+                    "--serverstransport.forwardingtimeouts.idleconntimeout=0s",
+                ],
+                "portMappings": [
+                    {"containerPort": 80, "hostPort": 80, "protocol": "tcp"},
+                    {"containerPort": 443, "hostPort": 443, "protocol": "tcp"},
+                ],
+                "mountPoints": [
+                    {"sourceVolume": "letsencrypt", "containerPath": "/letsencrypt"},
+                    {
+                        "sourceVolume": "docker-socket",
+                        "containerPath": "/var/run/docker.sock",
+                        "readOnly": True,
+                    },
+                ],
+                "logConfiguration": log_config("traefik"),
             },
-        ],
-        "logConfiguration": log_config("traefik"),
-    },
-    {
-        "name": "dashboard",
-        "image": dashboard_image,
-        "essential": True,
-        "memoryReservation": 128,
-        "environmentFiles": [{"value": f"{backup_bucket.arn}/config/dashboard.env", "type": "s3"}],
-        "dockerLabels": {
-            "traefik.enable": "true",
-            "traefik.http.routers.netbird-dashboard.rule": f"Host(`{domain}`)",
-            "traefik.http.routers.netbird-dashboard.entrypoints": "websecure",
-            "traefik.http.routers.netbird-dashboard.tls": "true",
-            "traefik.http.routers.netbird-dashboard.tls.certresolver": "letsencrypt",
-            "traefik.http.routers.netbird-dashboard.service": "dashboard",
-            "traefik.http.routers.netbird-dashboard.priority": "1",
-            "traefik.http.services.dashboard.loadbalancer.server.port": "80",
-        },
-        "logConfiguration": log_config("dashboard"),
-    },
-    {
-        "name": "litestream",
-        "image": litestream_image,
-        "essential": True,
-        "memoryReservation": 128,
-        "command": ["replicate", "-config", "/etc/litestream.yml"],
-        "stopTimeout": 60,
-        "mountPoints": [
-            {"sourceVolume": "netbird-data", "containerPath": "/var/lib/netbird"},
             {
-                "sourceVolume": "litestream-config",
-                "containerPath": "/etc/litestream.yml",
-                "readOnly": True,
+                "name": "dashboard",
+                "image": dashboard_image,
+                "essential": True,
+                "memoryReservation": 128,
+                "environmentFiles": [{"value": f"{arn}/config/dashboard.env", "type": "s3"}],
+                "dockerLabels": {
+                    "traefik.enable": "true",
+                    "traefik.http.routers.netbird-dashboard.rule": f"Host(`{domain}`)",
+                    "traefik.http.routers.netbird-dashboard.entrypoints": "websecure",
+                    "traefik.http.routers.netbird-dashboard.tls": "true",
+                    "traefik.http.routers.netbird-dashboard.tls.certresolver": "letsencrypt",
+                    "traefik.http.routers.netbird-dashboard.service": "dashboard",
+                    "traefik.http.routers.netbird-dashboard.priority": "1",
+                    "traefik.http.services.dashboard.loadbalancer.server.port": "80",
+                },
+                "logConfiguration": log_config("dashboard"),
             },
-        ],
-        "logConfiguration": log_config("litestream"),
-    },
-    {
-        "name": "netbird-server",
-        "image": netbird_image,
-        "essential": True,
-        "memoryReservation": 768,
-        "command": ["--config", "/etc/netbird/config.yaml"],
-        "dependsOn": [{"containerName": "litestream", "condition": "START"}],
-        "portMappings": [
-            {"containerPort": 3478, "hostPort": 3478, "protocol": "udp"},
-        ],
-        "mountPoints": [
-            {"sourceVolume": "netbird-data", "containerPath": "/var/lib/netbird"},
             {
-                "sourceVolume": "netbird-config",
-                "containerPath": "/etc/netbird/config.yaml",
-                "readOnly": True,
+                "name": "litestream",
+                "image": litestream_image,
+                "essential": True,
+                "memoryReservation": 128,
+                "command": ["replicate", "-config", "/etc/litestream.yml"],
+                "stopTimeout": 60,
+                "mountPoints": [
+                    {"sourceVolume": "netbird-data", "containerPath": "/var/lib/netbird"},
+                    {
+                        "sourceVolume": "litestream-config",
+                        "containerPath": "/etc/litestream.yml",
+                        "readOnly": True,
+                    },
+                ],
+                "logConfiguration": log_config("litestream"),
             },
-        ],
-        "dockerLabels": {
-            "traefik.enable": "true",
-            "traefik.http.routers.netbird-grpc.rule": f"Host(`{domain}`) && ({grpc_paths})",
-            "traefik.http.routers.netbird-grpc.entrypoints": "websecure",
-            "traefik.http.routers.netbird-grpc.tls": "true",
-            "traefik.http.routers.netbird-grpc.tls.certresolver": "letsencrypt",
-            "traefik.http.routers.netbird-grpc.service": "netbird-server-h2c",
-            "traefik.http.routers.netbird-grpc.priority": "100",
-            "traefik.http.routers.netbird-backend.rule": f"Host(`{domain}`) && ({backend_paths})",
-            "traefik.http.routers.netbird-backend.entrypoints": "websecure",
-            "traefik.http.routers.netbird-backend.tls": "true",
-            "traefik.http.routers.netbird-backend.tls.certresolver": "letsencrypt",
-            "traefik.http.routers.netbird-backend.service": "netbird-server",
-            "traefik.http.routers.netbird-backend.priority": "100",
-            "traefik.http.services.netbird-server.loadbalancer.server.port": "80",
-            "traefik.http.services.netbird-server-h2c.loadbalancer.server.port": "80",
-            "traefik.http.services.netbird-server-h2c.loadbalancer.server.scheme": "h2c",
-        },
-        "logConfiguration": log_config("server"),
-    },
-]
+            {
+                "name": "netbird-server",
+                "image": netbird_image,
+                "essential": True,
+                "memoryReservation": 768,
+                "command": ["--config", "/etc/netbird/config.yaml"],
+                "dependsOn": [{"containerName": "litestream", "condition": "START"}],
+                "portMappings": [
+                    {"containerPort": 3478, "hostPort": 3478, "protocol": "udp"},
+                ],
+                "mountPoints": [
+                    {"sourceVolume": "netbird-data", "containerPath": "/var/lib/netbird"},
+                    {
+                        "sourceVolume": "netbird-config",
+                        "containerPath": "/etc/netbird/config.yaml",
+                        "readOnly": True,
+                    },
+                ],
+                "dockerLabels": {
+                    "traefik.enable": "true",
+                    "traefik.http.routers.netbird-grpc.rule": grpc_rule,
+                    "traefik.http.routers.netbird-grpc.entrypoints": "websecure",
+                    "traefik.http.routers.netbird-grpc.tls": "true",
+                    "traefik.http.routers.netbird-grpc.tls.certresolver": "letsencrypt",
+                    "traefik.http.routers.netbird-grpc.service": "netbird-server-h2c",
+                    "traefik.http.routers.netbird-grpc.priority": "100",
+                    "traefik.http.routers.netbird-backend.rule": backend_rule,
+                    "traefik.http.routers.netbird-backend.entrypoints": "websecure",
+                    "traefik.http.routers.netbird-backend.tls": "true",
+                    "traefik.http.routers.netbird-backend.tls.certresolver": "letsencrypt",
+                    "traefik.http.routers.netbird-backend.service": "netbird-server",
+                    "traefik.http.routers.netbird-backend.priority": "100",
+                    "traefik.http.services.netbird-server.loadbalancer.server.port": "80",
+                    "traefik.http.services.netbird-server-h2c.loadbalancer.server.port": "80",
+                    "traefik.http.services.netbird-server-h2c.loadbalancer.server.scheme": "h2c",
+                },
+                "logConfiguration": log_config("server"),
+            },
+        ]
+    )
+
 
 task_definition = aws.ecs.TaskDefinition(
     "task",
@@ -592,7 +630,7 @@ task_definition = aws.ecs.TaskDefinition(
         {"name": "litestream-config", "host_path": f"{NB_DIR}/litestream.yml"},
         {"name": "docker-socket", "host_path": "/var/run/docker.sock"},
     ],
-    container_definitions=json.dumps(containers),
+    container_definitions=backup_bucket.arn.apply(container_definitions),
     tags={**tags, "Name": NAME},
     opts=pulumi.ResourceOptions(depends_on=[ecs_logs]),
 )
@@ -919,7 +957,7 @@ pulumi.export("asg_name", asg.name)
 pulumi.export("public_ip", eip.public_ip)
 pulumi.export("domain", domain)
 pulumi.export("dashboard_url", f"https://{domain}")
-pulumi.export("litestream_bucket", litestream_bucket)
+pulumi.export("litestream_bucket", backup_bucket.bucket)
 pulumi.export("vpc_id", vpc.id)
 pulumi.export("security_group_id", sg.id)
 pulumi.export("alerts_topic_arn", alerts.arn)
