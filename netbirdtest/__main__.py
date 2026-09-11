@@ -469,6 +469,122 @@ aws.cloudwatch.EventTarget(
 )
 
 
+failover_role = aws.iam.Role(
+    "failover-lambda",
+    name=f"{NAME}-failover-lambda",
+    assume_role_policy=json.dumps(
+        {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Effect": "Allow",
+                    "Action": "sts:AssumeRole",
+                    "Principal": {"Service": "lambda.amazonaws.com"},
+                }
+            ],
+        }
+    ),
+    tags={**tags, "Name": NAME},
+)
+
+aws.iam.RolePolicyAttachment(
+    "failover-lambda-logs",
+    role=failover_role.name,
+    policy_arn="arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+)
+
+aws.iam.RolePolicy(
+    "failover-lambda-policy",
+    role=failover_role.name,
+    policy=pulumi.Output.all(asg.arn, alerts.arn, region).apply(
+        lambda a: json.dumps(
+            {
+                "Version": "2012-10-17",
+                "Statement": [
+                    {
+                        "Effect": "Allow",
+                        "Action": "autoscaling:DescribeAutoScalingGroups",
+                        "Resource": "*",
+                    },
+                    {
+                        "Effect": "Allow",
+                        "Action": "autoscaling:SetDesiredCapacity",
+                        "Resource": a[0],
+                    },
+                    {
+                        "Effect": "Allow",
+                        "Action": "ec2:DescribeInstances",
+                        "Resource": "*",
+                    },
+                    {
+                        "Effect": "Allow",
+                        "Action": ["ec2:StartInstances", "ec2:StopInstances"],
+                        "Resource": "*",
+                        "Condition": {"StringEquals": {"ec2:ResourceTag/Name": f"{NAME}-standby"}},
+                    },
+                    {
+                        "Effect": "Allow",
+                        "Action": "ssm:SendCommand",
+                        "Resource": f"arn:aws:ssm:{a[2]}::document/AWS-RunShellScript",
+                    },
+                    {
+                        "Effect": "Allow",
+                        "Action": "ssm:SendCommand",
+                        "Resource": "arn:aws:ec2:*:*:instance/*",
+                        "Condition": {"StringEquals": {"ssm:resourceTag/App": "5tmate"}},
+                    },
+                    {
+                        "Effect": "Allow",
+                        "Action": "ssm:GetCommandInvocation",
+                        "Resource": "*",
+                    },
+                    {"Effect": "Allow", "Action": "sns:Publish", "Resource": a[1]},
+                ],
+            }
+        )
+    ),
+)
+
+failover = aws.lambda_.Function(
+    "failover",
+    name=f"{NAME}-failover",
+    role=failover_role.arn,
+    runtime="python3.12",
+    handler="handler.handler",
+    code=pulumi.FileArchive(str(Path(__file__).parent / "lambda" / "src")),
+    timeout=870,
+    memory_size=256,
+    reserved_concurrent_executions=1,
+    environment={
+        "variables": {
+            "ASG_NAME": NAME,
+            "STANDBY_NAME": f"{NAME}-standby",
+            "DOMAIN": domain,
+            "HEALTH_PATH": "/oauth2",
+            "NO_CAPACITY_ALARM": f"{NAME}-no-capacity",
+            "CAPACITY_STABLE_ALARM": f"{NAME}-capacity-stable",
+            "TOPIC_ARN": alerts.arn,
+        }
+    },
+    tags={**tags, "Name": NAME},
+)
+
+aws.cloudwatch.EventTarget(
+    "alarm-events-lambda",
+    rule=alarm_events.name,
+    target_id="failover",
+    arn=failover.arn,
+)
+
+aws.lambda_.Permission(
+    "alarm-events-invoke",
+    action="lambda:InvokeFunction",
+    function=failover.name,
+    principal="events.amazonaws.com",
+    source_arn=alarm_events.arn,
+)
+
+
 pulumi.export("asg_name", asg.name)
 pulumi.export("public_ip", eip.public_ip)
 pulumi.export("domain", domain)
@@ -477,5 +593,6 @@ pulumi.export("litestream_bucket", litestream_bucket)
 pulumi.export("vpc_id", vpc.id)
 pulumi.export("security_group_id", sg.id)
 pulumi.export("alerts_topic_arn", alerts.arn)
+pulumi.export("failover_function", failover.name)
 pulumi.export("asg_event_log_group", event_log.name)
 pulumi.export("ssh", eip.public_ip.apply(lambda ip: f"ssh ec2-user@{ip}"))
