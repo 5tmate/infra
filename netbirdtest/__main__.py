@@ -621,7 +621,7 @@ service = aws.ecs.Service(
     desired_count=1,
     deployment_minimum_healthy_percent=0,
     deployment_maximum_percent=100,
-    capacity_provider_strategies=[{"capacity_provider": capacity_provider.name, "weight": 1}],
+    launch_type="EC2",
     tags={**tags, "Name": NAME},
 )
 
@@ -848,9 +848,14 @@ aws.iam.RolePolicy(
                         "Effect": "Allow",
                         "Action": [
                             "ecs:ListContainerInstances",
-                            "ecs:ListTasks",
                         ],
                         "Resource": a[0],
+                    },
+                    {
+                        "Effect": "Allow",
+                        "Action": "ecs:ListTasks",
+                        "Resource": "*",
+                        "Condition": {"ArnEquals": {"ecs:cluster": a[0]}},
                     },
                     {
                         "Effect": "Allow",

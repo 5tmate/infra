@@ -94,6 +94,11 @@ def wait_task_on(context, wanted, budget, equal=True):
     raise Failed("the service never placed a running task where it was needed")
 
 
+def eip_holder():
+    addresses = ec2.describe_addresses(AllocationIds=[EIP_ALLOC])["Addresses"]
+    return addresses[0].get("InstanceId") if addresses else None
+
+
 def claim_eip(instance_id):
     log.info("moving the elastic ip to %s", instance_id)
     ec2.associate_address(AllocationId=EIP_ALLOC, InstanceId=instance_id, AllowReassociation=True)
@@ -133,15 +138,14 @@ def fail_over(context):
     instance_id, state = standby_instance()
     if instance_id is None:
         raise Failed(f"no instance tagged {STANDBY_NAME}")
-    if state in ("pending", "running"):
-        return f"standby {instance_id} is already {state}, nothing to do"
 
-    existing = container_instances().get(instance_id)
-    if existing and existing["status"] == "DRAINING":
-        set_state(existing["containerInstanceArn"], "ACTIVE")
+    if state not in ("pending", "running"):
+        existing = container_instances().get(instance_id)
+        if existing and existing["status"] == "DRAINING":
+            set_state(existing["containerInstanceArn"], "ACTIVE")
+        log.info("starting standby %s", instance_id)
+        ec2.start_instances(InstanceIds=[instance_id])
 
-    log.info("starting standby %s", instance_id)
-    ec2.start_instances(InstanceIds=[instance_id])
     ec2.get_waiter("instance_running").wait(
         InstanceIds=[instance_id], WaiterConfig={"Delay": 10, "MaxAttempts": 30}
     )
@@ -158,8 +162,12 @@ def fail_over(context):
     if not arn:
         raise Failed(f"standby {instance_id} never joined the cluster")
 
-    wait_task_on(context, arn, budget=300)
-    claim_eip(instance_id)
+    if running_task_host() != arn:
+        wait_task_on(context, arn, budget=300)
+
+    if eip_holder() != instance_id:
+        claim_eip(instance_id)
+
     if not wait_healthy(context, budget=180):
         raise Failed(f"the task runs on standby {instance_id} but {DOMAIN} is silent")
     return f"switched to standby {instance_id}"
