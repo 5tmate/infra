@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pulumi
 import pulumi_aws as aws
+import pulumi_random as random
 
 VPC_CIDR = "10.2.0.0/24"
 SUBNET_CIDR = "10.2.0.0/28"
@@ -208,7 +209,39 @@ aws.s3.BucketServerSideEncryptionConfigurationV2(
     rules=[{"apply_server_side_encryption_by_default": {"sse_algorithm": "AES256"}}],
 )
 
-aws.iam.RolePolicy(
+_secrets = {
+    name: random.RandomPassword(
+        name, length=length, special=False, opts=pulumi.ResourceOptions(protect=True)
+    )
+    for name, length in (
+        ("auth-secret", 43),
+        ("session-key", 44),
+        ("store-encryption-key", 44),
+    )
+}
+
+_config_template = (Path(__file__).parent / "files" / "config.yaml").read_text()
+
+netbird_config = aws.s3.BucketObject(
+    "config-yaml",
+    bucket=backup_bucket.id,
+    key="config/config.yaml",
+    content=pulumi.Output.all(
+        _secrets["auth-secret"].result,
+        _secrets["session-key"].result,
+        _secrets["store-encryption-key"].result,
+    ).apply(
+        lambda v: (
+            _config_template.replace("__DOMAIN__", domain)
+            .replace("__AUTH_SECRET__", v[0])
+            .replace("__SESSION_KEY__", v[1])
+            .replace("__ENCRYPTION_KEY__", v[2])
+        )
+    ),
+    opts=pulumi.ResourceOptions(ignore_changes=["content"]),
+)
+
+backup_access = aws.iam.RolePolicy(
     "litestream-s3",
     role=ssm_role.name,
     policy=backup_bucket.arn.apply(
@@ -270,8 +303,6 @@ _user_data = (Path(__file__).parent / "files" / "user_data.sh").read_text()
 def render_user_data(eip_allocation_id, role):
     return (
         _user_data.replace("__BUCKET__", BACKUP_BUCKET)
-        .replace("__DOMAIN__", domain)
-        .replace("__LE_EMAIL__", letsencrypt_email)
         .replace("__REGION__", region)
         .replace("__CLUSTER__", NAME)
         .replace("__EIP_ALLOC__", eip_allocation_id)
@@ -309,6 +340,7 @@ launch_template = aws.ec2.LaunchTemplate(
     ],
     user_data=user_data.apply(lambda t: base64.b64encode(t.encode()).decode()),
     update_default_version=True,
+    opts=pulumi.ResourceOptions(depends_on=[netbird_config, backup_access]),
     tag_specifications=[
         {"resource_type": "instance", "tags": {**tags, "Name": NAME}},
         {"resource_type": "volume", "tags": {**tags, "Name": NAME}},
@@ -402,30 +434,6 @@ aws.iam.RolePolicyAttachment(
     "ecs-execution-managed",
     role=execution_role.name,
     policy_arn="arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy",
-)
-
-aws.iam.RolePolicy(
-    "ecs-execution-envfile",
-    role=execution_role.name,
-    policy=backup_bucket.arn.apply(
-        lambda arn: json.dumps(
-            {
-                "Version": "2012-10-17",
-                "Statement": [
-                    {
-                        "Effect": "Allow",
-                        "Action": "s3:GetObject",
-                        "Resource": f"{arn}/config/*",
-                    },
-                    {
-                        "Effect": "Allow",
-                        "Action": "s3:GetBucketLocation",
-                        "Resource": arn,
-                    },
-                ],
-            }
-        )
-    ),
 )
 
 task_role = aws.iam.Role(
@@ -543,7 +551,26 @@ def container_definitions(arn):
                 "image": dashboard_image,
                 "essential": True,
                 "memoryReservation": 128,
-                "environmentFiles": [{"value": f"{arn}/config/dashboard.env", "type": "s3"}],
+                "environment": [
+                    {"name": "NETBIRD_MGMT_API_ENDPOINT", "value": f"https://{domain}"},
+                    {
+                        "name": "NETBIRD_MGMT_GRPC_API_ENDPOINT",
+                        "value": f"https://{domain}",
+                    },
+                    {"name": "AUTH_AUDIENCE", "value": "netbird-dashboard"},
+                    {"name": "AUTH_CLIENT_ID", "value": "netbird-dashboard"},
+                    {"name": "AUTH_CLIENT_SECRET", "value": ""},
+                    {"name": "AUTH_AUTHORITY", "value": f"https://{domain}/oauth2"},
+                    {"name": "USE_AUTH0", "value": "false"},
+                    {
+                        "name": "AUTH_SUPPORTED_SCOPES",
+                        "value": "openid profile email groups",
+                    },
+                    {"name": "AUTH_REDIRECT_URI", "value": "/nb-auth"},
+                    {"name": "AUTH_SILENT_REDIRECT_URI", "value": "/nb-silent-auth"},
+                    {"name": "NGINX_SSL_PORT", "value": "443"},
+                    {"name": "LETSENCRYPT_DOMAIN", "value": "none"},
+                ],
                 "dockerLabels": {
                     "traefik.enable": "true",
                     "traefik.http.routers.netbird-dashboard.rule": f"Host(`{domain}`)",
@@ -664,6 +691,7 @@ standby = aws.ec2.Instance(
         "delete_on_termination": True,
     },
     tags={**tags, "Name": STANDBY_NAME},
+    opts=pulumi.ResourceOptions(depends_on=[netbird_config, backup_access]),
 )
 
 
