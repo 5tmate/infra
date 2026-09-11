@@ -7,23 +7,21 @@ import urllib.request
 
 import boto3
 
-ASG_NAME = os.environ["ASG_NAME"]
+CLUSTER = os.environ["CLUSTER"]
+SERVICE = os.environ["SERVICE"]
 STANDBY_NAME = os.environ["STANDBY_NAME"]
+EIP_ALLOC = os.environ["EIP_ALLOC"]
 DOMAIN = os.environ["DOMAIN"]
 HEALTH_PATH = os.environ.get("HEALTH_PATH", "/oauth2")
 NO_CAPACITY_ALARM = os.environ["NO_CAPACITY_ALARM"]
 CAPACITY_STABLE_ALARM = os.environ["CAPACITY_STABLE_ALARM"]
 TOPIC_ARN = os.environ["TOPIC_ARN"]
 
-TAKEOVER = "/usr/local/bin/netbird-takeover"
-STANDDOWN = "/usr/local/bin/netbird-standdown"
-
 log = logging.getLogger()
 log.setLevel(logging.INFO)
 
-asg = boto3.client("autoscaling")
+ecs = boto3.client("ecs")
 ec2 = boto3.client("ec2")
-ssm = boto3.client("ssm")
 sns = boto3.client("sns")
 
 
@@ -56,35 +54,45 @@ def standby_instance():
     return None, None
 
 
-def asg_group():
-    groups = asg.describe_auto_scaling_groups(AutoScalingGroupNames=[ASG_NAME])
-    return groups["AutoScalingGroups"][0]
+def container_instances():
+    arns = ecs.list_container_instances(cluster=CLUSTER, status="ACTIVE")["containerInstanceArns"]
+    arns += ecs.list_container_instances(cluster=CLUSTER, status="DRAINING")[
+        "containerInstanceArns"
+    ]
+    if not arns:
+        return {}
+    described = ecs.describe_container_instances(cluster=CLUSTER, containerInstances=arns)[
+        "containerInstances"
+    ]
+    return {c["ec2InstanceId"]: c for c in described}
 
 
-def asg_instance_ids():
-    return [i["InstanceId"] for i in asg_group()["Instances"]]
+def running_task_host():
+    arns = ecs.list_tasks(cluster=CLUSTER, serviceName=SERVICE, desiredStatus="RUNNING")["taskArns"]
+    if not arns:
+        return None
+    tasks = ecs.describe_tasks(cluster=CLUSTER, tasks=arns)["tasks"]
+    for task in tasks:
+        if task["lastStatus"] == "RUNNING":
+            return task.get("containerInstanceArn")
+    return None
 
 
-def asg_in_service():
-    return [i["InstanceId"] for i in asg_group()["Instances"] if i["LifecycleState"] == "InService"]
-
-
-def set_desired(count):
-    asg.set_desired_capacity(
-        AutoScalingGroupName=ASG_NAME, DesiredCapacity=count, HonorCooldown=False
-    )
-
-
-def wait_asg_empty(context, budget):
+def wait_task_on(context, wanted, budget, equal=True):
     deadline = time.time() + min(budget, remaining(context) - 60)
     while time.time() < deadline:
-        left = asg_instance_ids()
-        if not left:
-            log.info("the group is empty")
-            return
-        log.info("waiting for %s to go away", left)
+        host = running_task_host()
+        if host and ((host == wanted) if equal else (host != wanted)):
+            log.info("the task is running on %s", host)
+            return host
+        log.info("the task is on %s, waiting", host)
         time.sleep(10)
-    raise Failed("the group still has instances after waiting")
+    raise Failed("the service never placed a running task where it was needed")
+
+
+def claim_eip(instance_id):
+    log.info("moving the elastic ip to %s", instance_id)
+    ec2.associate_address(AllocationId=EIP_ALLOC, InstanceId=instance_id, AllowReassociation=True)
 
 
 def healthy():
@@ -99,7 +107,7 @@ def healthy():
 
 
 def wait_healthy(context, budget):
-    deadline = time.time() + min(budget, remaining(context) - 60)
+    deadline = time.time() + min(budget, remaining(context) - 45)
     started = time.time()
     while time.time() < deadline:
         if healthy():
@@ -110,63 +118,44 @@ def wait_healthy(context, budget):
     return False
 
 
-def run(instance_id, script, context, budget):
-    sent = ssm.send_command(
-        InstanceIds=[instance_id],
-        DocumentName="AWS-RunShellScript",
-        Parameters={"commands": [script]},
-        TimeoutSeconds=600,
+def set_state(container_instance_arn, state):
+    log.info("setting %s to %s", container_instance_arn, state)
+    ecs.update_container_instances_state(
+        cluster=CLUSTER, containerInstances=[container_instance_arn], status=state
     )
-    command_id = sent["Command"]["CommandId"]
-    log.info("running %s on %s as %s", script, instance_id, command_id)
-    deadline = time.time() + min(budget, remaining(context) - 45)
-    while time.time() < deadline:
-        time.sleep(5)
-        try:
-            result = ssm.get_command_invocation(CommandId=command_id, InstanceId=instance_id)
-        except ssm.exceptions.InvocationDoesNotExist:
-            continue
-        if result["Status"] in ("Pending", "InProgress", "Delayed"):
-            continue
-        if result["Status"] == "Success":
-            log.info("%s on %s finished", script, instance_id)
-            return result["StandardOutputContent"]
-        raise Failed(
-            f"{script} on {instance_id} ended as {result['Status']}: "
-            f"{result['StandardErrorContent'][:500]}"
-        )
-    raise Failed(f"{script} on {instance_id} did not finish in time")
 
 
 def fail_over(context):
     instance_id, state = standby_instance()
     if instance_id is None:
         raise Failed(f"no instance tagged {STANDBY_NAME}")
-
     if state in ("pending", "running"):
-        if asg_group()["DesiredCapacity"] != 1:
-            set_desired(1)
         return f"standby {instance_id} is already {state}, nothing to do"
 
-    log.info("fencing the group, standby %s is %s", instance_id, state)
-    set_desired(0)
-    try:
-        wait_asg_empty(context, budget=240)
-        log.info("starting standby %s", instance_id)
-        ec2.start_instances(InstanceIds=[instance_id])
-        ec2.get_waiter("instance_running").wait(
-            InstanceIds=[instance_id], WaiterConfig={"Delay": 10, "MaxAttempts": 30}
-        )
-    except Exception:
-        log.exception("could not hand over to the standby, unfencing the group")
-        set_desired(1)
-        raise
+    existing = container_instances().get(instance_id)
+    if existing and existing["status"] == "DRAINING":
+        set_state(existing["containerInstanceArn"], "ACTIVE")
 
-    served = wait_healthy(context, budget=420)
-    log.info("unfencing the group")
-    set_desired(1)
-    if not served:
-        raise Failed(f"standby {instance_id} started but {DOMAIN} is not serving")
+    log.info("starting standby %s", instance_id)
+    ec2.start_instances(InstanceIds=[instance_id])
+    ec2.get_waiter("instance_running").wait(
+        InstanceIds=[instance_id], WaiterConfig={"Delay": 10, "MaxAttempts": 30}
+    )
+
+    deadline = time.time() + min(300, remaining(context) - 240)
+    arn = None
+    while time.time() < deadline:
+        arn = (container_instances().get(instance_id) or {}).get("containerInstanceArn")
+        if arn:
+            break
+        time.sleep(10)
+    if not arn:
+        raise Failed(f"standby {instance_id} never joined the cluster")
+
+    wait_task_on(context, arn, budget=300)
+    claim_eip(instance_id)
+    if not wait_healthy(context, budget=180):
+        raise Failed(f"the task runs on standby {instance_id} but {DOMAIN} is silent")
     return f"switched to standby {instance_id}"
 
 
@@ -175,46 +164,41 @@ def fail_back(context):
     if state != "running":
         return f"standby is {state}, nothing to do"
 
-    primary = asg_in_service()
-    if not primary:
-        return "no instance in service, staying on the standby"
-    primary_id = primary[0]
-    log.info("handing %s back from standby %s", primary_id, instance_id)
+    hosts = container_instances()
+    standby_arn = (hosts.get(instance_id) or {}).get("containerInstanceArn")
+    if standby_arn is None:
+        return f"standby {instance_id} is not in the cluster, nothing to do"
+    if running_task_host() != standby_arn:
+        return "the task is not on the standby, nothing to do"
 
-    run(instance_id, STANDDOWN, context, budget=180)
+    primary = [c for i, c in hosts.items() if i != instance_id and c["status"] == "ACTIVE"]
+    if not primary:
+        return "no other container instance to hand back to, staying on the standby"
+    primary_id = primary[0]["ec2InstanceId"]
+
+    log.info("draining %s so the task moves back to %s", instance_id, primary_id)
+    set_state(standby_arn, "DRAINING")
 
     try:
-        run(primary_id, TAKEOVER, context, budget=300)
+        wait_task_on(context, standby_arn, budget=300, equal=False)
+        claim_eip(primary_id)
         if not wait_healthy(context, budget=180):
-            raise Failed(f"{primary_id} took over but {DOMAIN} is not serving")
+            raise Failed(f"the task moved to {primary_id} but {DOMAIN} is silent")
     except Failed as e:
-        log.error("takeover failed, rolling back: %s", e)
-        roll_back(instance_id, primary_id, context)
-        raise Failed(f"{e}. rolled back to the standby")
+        log.error("handing back failed, undraining the standby: %s", e)
+        set_state(standby_arn, "ACTIVE")
+        claim_eip(instance_id)
+        raise Failed(f"{e}. left the task on the standby")
 
     log.info("stopping standby %s", instance_id)
     ec2.stop_instances(InstanceIds=[instance_id])
-    return f"switched back to {primary_id}, standby {instance_id} stopping"
-
-
-def roll_back(standby_id, primary_id, context):
-    try:
-        run(primary_id, STANDDOWN, context, budget=120)
-    except Exception as e:
-        notify(
-            "netbird failback rollback needs attention",
-            f"could not stop NetBird on {primary_id}: {e}\n"
-            f"not restarting the standby, two writers would overwrite each other",
-        )
-        raise
-    run(standby_id, TAKEOVER, context, budget=240)
+    return f"handed back to {primary_id}, standby {instance_id} stopping"
 
 
 def handler(event, context):
     detail = event.get("detail", {})
     name = detail.get("alarmName")
     state = detail.get("state", {}).get("value")
-
     log.info("alarm %s is %s", name, state)
 
     if state != "ALARM":

@@ -7,9 +7,13 @@ import pulumi_aws as aws
 
 VPC_CIDR = "10.2.0.0/24"
 SUBNET_CIDR = "10.2.0.0/28"
+STANDBY_SUBNET_CIDR = "10.2.0.16/28"
 AZ = "ap-northeast-1a"
+STANDBY_AZ = "ap-northeast-1c"
 NAME = "5tmate-netbirdtest"
-AMI_PARAMETER = "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64"
+STANDBY_NAME = f"{NAME}-standby"
+NB_DIR = "/opt/netbird"
+AMI_PARAMETER = "/aws/service/ecs/optimized-ami/amazon-linux-2023/arm64/recommended/image_id"
 
 tags = {"App": "5tmate", "ManagedBy": "pulumi"}
 
@@ -22,7 +26,16 @@ letsencrypt_email = config.get("letsencrypt_email") or f"admin@{zone_name}"
 litestream_version = config.get("litestream_version") or "0.5.17"
 litestream_bucket = config.require("litestream_bucket")
 root_volume_size = config.get_int("root_volume_size") or 30
-instance_types = config.get_object("instance_types") or ["t3.small", "t3a.small", "t2.small"]
+instance_types = config.get_object("instance_types") or [
+    "t4g.small",
+    "t4g.medium",
+    "m6g.medium",
+]
+standby_instance_type = config.get("standby_instance_type") or "t4g.small"
+netbird_image = config.get("netbird_image") or "netbirdio/netbird-server:latest"
+dashboard_image = config.get("dashboard_image") or "netbirdio/dashboard:latest"
+traefik_image = config.get("traefik_image") or "traefik:v3.6"
+litestream_image = config.get("litestream_image") or f"litestream/litestream:{litestream_version}"
 on_demand_base = config.get_int("on_demand_base")
 if on_demand_base is None:
     on_demand_base = 1
@@ -56,6 +69,16 @@ subnet = aws.ec2.Subnet(
 )
 
 
+standby_subnet = aws.ec2.Subnet(
+    "standby-subnet",
+    vpc_id=vpc.id,
+    cidr_block=STANDBY_SUBNET_CIDR,
+    availability_zone=STANDBY_AZ,
+    map_public_ip_on_launch=True,
+    tags={**tags, "Name": STANDBY_NAME},
+)
+
+
 igw = aws.ec2.InternetGateway(
     "igw",
     vpc_id=vpc.id,
@@ -78,6 +101,12 @@ route_table = aws.ec2.RouteTable(
 aws.ec2.RouteTableAssociation(
     "rt-assoc",
     subnet_id=subnet.id,
+    route_table_id=route_table.id,
+)
+
+aws.ec2.RouteTableAssociation(
+    "standby-route",
+    subnet_id=standby_subnet.id,
     route_table_id=route_table.id,
 )
 
@@ -223,18 +252,22 @@ aws.iam.RolePolicy(
 
 _user_data = (Path(__file__).parent / "files" / "user_data.sh").read_text()
 
-user_data = pulumi.Output.all(eip.id, eip.public_ip).apply(
-    lambda a: (
-        _user_data.replace("__DOMAIN__", domain)
-        .replace("__BUCKET__", litestream_bucket)
+
+def render_user_data(eip_allocation_id, claim_eip):
+    return (
+        _user_data.replace("__BUCKET__", litestream_bucket)
         .replace("__REGION__", region)
-        .replace("__LE_EMAIL__", letsencrypt_email)
-        .replace("__LITESTREAM_VERSION__", litestream_version)
-        .replace("__EIP_ALLOC__", a[0])
-        .replace("__EIP_ADDR__", a[1])
-        .replace("__STANDBY_NAME__", f"{NAME}-standby")
+        .replace("__CLUSTER__", NAME)
+        .replace("__EIP_ALLOC__", eip_allocation_id)
+        .replace("__LITESTREAM_IMAGE__", litestream_image)
+        .replace("__CLAIM_EIP__", claim_eip)
+        .replace("__NB_DIR__", NB_DIR)
+        .replace("__STANDBY_NAME__", STANDBY_NAME)
     )
-)
+
+
+user_data = eip.id.apply(lambda i: render_user_data(i, "yes"))
+standby_user_data = eip.id.apply(lambda i: render_user_data(i, "no"))
 
 
 launch_template = aws.ec2.LaunchTemplate(
@@ -300,6 +333,310 @@ asg = aws.autoscaling.Group(
         {"key": k, "value": v, "propagate_at_launch": True}
         for k, v in {**tags, "Name": NAME}.items()
     ],
+)
+
+
+cluster = aws.ecs.Cluster("cluster", name=NAME, tags={**tags, "Name": NAME})
+
+ecs_logs = aws.cloudwatch.LogGroup(
+    "ecs-logs",
+    name=f"/ecs/{NAME}",
+    retention_in_days=14,
+    tags={**tags, "Name": NAME},
+)
+
+capacity_provider = aws.ecs.CapacityProvider(
+    "capacity",
+    name=NAME,
+    auto_scaling_group_provider={
+        "auto_scaling_group_arn": asg.arn,
+        "managed_termination_protection": "DISABLED",
+        "managed_scaling": {"status": "DISABLED"},
+    },
+    tags={**tags, "Name": NAME},
+)
+
+aws.ecs.ClusterCapacityProviders(
+    "cluster-capacity",
+    cluster_name=cluster.name,
+    capacity_providers=[capacity_provider.name],
+    default_capacity_provider_strategies=[
+        {"capacity_provider": capacity_provider.name, "weight": 1}
+    ],
+)
+
+execution_role = aws.iam.Role(
+    "ecs-execution",
+    name=f"{NAME}-ecs-execution",
+    assume_role_policy=json.dumps(
+        {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Effect": "Allow",
+                    "Action": "sts:AssumeRole",
+                    "Principal": {"Service": "ecs-tasks.amazonaws.com"},
+                }
+            ],
+        }
+    ),
+    tags={**tags, "Name": NAME},
+)
+
+aws.iam.RolePolicyAttachment(
+    "ecs-execution-managed",
+    role=execution_role.name,
+    policy_arn="arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy",
+)
+
+aws.iam.RolePolicy(
+    "ecs-execution-envfile",
+    role=execution_role.name,
+    policy=json.dumps(
+        {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Effect": "Allow",
+                    "Action": "s3:GetObject",
+                    "Resource": f"{backup_bucket.arn}/config/*",
+                },
+                {
+                    "Effect": "Allow",
+                    "Action": "s3:GetBucketLocation",
+                    "Resource": backup_bucket.arn,
+                },
+            ],
+        }
+    ),
+)
+
+task_role = aws.iam.Role(
+    "ecs-task",
+    name=f"{NAME}-ecs-task",
+    assume_role_policy=json.dumps(
+        {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Effect": "Allow",
+                    "Action": "sts:AssumeRole",
+                    "Principal": {"Service": "ecs-tasks.amazonaws.com"},
+                }
+            ],
+        }
+    ),
+    tags={**tags, "Name": NAME},
+)
+
+aws.iam.RolePolicy(
+    "ecs-task-litestream",
+    role=task_role.name,
+    policy=json.dumps(
+        {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Effect": "Allow",
+                    "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+                    "Resource": f"{backup_bucket.arn}/*",
+                },
+                {
+                    "Effect": "Allow",
+                    "Action": ["s3:ListBucket", "s3:GetBucketLocation"],
+                    "Resource": backup_bucket.arn,
+                },
+            ],
+        }
+    ),
+)
+
+
+def log_config(stream):
+    return {
+        "logDriver": "awslogs",
+        "options": {
+            "awslogs-group": f"/ecs/{NAME}",
+            "awslogs-region": region,
+            "awslogs-stream-prefix": stream,
+        },
+    }
+
+
+grpc_paths = (
+    "PathPrefix(`/signalexchange.SignalExchange/`) "
+    "|| PathPrefix(`/management.ManagementService/`) "
+    "|| PathPrefix(`/management.ProxyService/`)"
+)
+backend_paths = (
+    "PathPrefix(`/relay`) || PathPrefix(`/ws-proxy/`) "
+    "|| PathPrefix(`/api`) || PathPrefix(`/oauth2`)"
+)
+
+containers = [
+    {
+        "name": "traefik",
+        "image": traefik_image,
+        "essential": True,
+        "memoryReservation": 128,
+        "command": [
+            "--log.level=INFO",
+            "--accesslog=true",
+            "--providers.docker=true",
+            "--providers.docker.exposedbydefault=false",
+            "--entrypoints.web.address=:80",
+            "--entrypoints.websecure.address=:443",
+            "--entrypoints.websecure.allowACMEByPass=true",
+            "--entrypoints.websecure.transport.respondingTimeouts.readTimeout=0",
+            "--entrypoints.websecure.transport.respondingTimeouts.writeTimeout=0",
+            "--entrypoints.websecure.transport.respondingTimeouts.idleTimeout=0",
+            "--entrypoints.web.http.redirections.entrypoint.to=websecure",
+            "--entrypoints.web.http.redirections.entrypoint.scheme=https",
+            f"--certificatesresolvers.letsencrypt.acme.email={letsencrypt_email}",
+            "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json",
+            "--certificatesresolvers.letsencrypt.acme.tlschallenge=true",
+            "--serverstransport.forwardingtimeouts.responseheadertimeout=0s",
+            "--serverstransport.forwardingtimeouts.idleconntimeout=0s",
+        ],
+        "portMappings": [
+            {"containerPort": 80, "hostPort": 80, "protocol": "tcp"},
+            {"containerPort": 443, "hostPort": 443, "protocol": "tcp"},
+        ],
+        "mountPoints": [
+            {"sourceVolume": "letsencrypt", "containerPath": "/letsencrypt"},
+            {
+                "sourceVolume": "docker-socket",
+                "containerPath": "/var/run/docker.sock",
+                "readOnly": True,
+            },
+        ],
+        "logConfiguration": log_config("traefik"),
+    },
+    {
+        "name": "dashboard",
+        "image": dashboard_image,
+        "essential": True,
+        "memoryReservation": 128,
+        "environmentFiles": [{"value": f"{backup_bucket.arn}/config/dashboard.env", "type": "s3"}],
+        "dockerLabels": {
+            "traefik.enable": "true",
+            "traefik.http.routers.netbird-dashboard.rule": f"Host(`{domain}`)",
+            "traefik.http.routers.netbird-dashboard.entrypoints": "websecure",
+            "traefik.http.routers.netbird-dashboard.tls": "true",
+            "traefik.http.routers.netbird-dashboard.tls.certresolver": "letsencrypt",
+            "traefik.http.routers.netbird-dashboard.service": "dashboard",
+            "traefik.http.routers.netbird-dashboard.priority": "1",
+            "traefik.http.services.dashboard.loadbalancer.server.port": "80",
+        },
+        "logConfiguration": log_config("dashboard"),
+    },
+    {
+        "name": "litestream",
+        "image": litestream_image,
+        "essential": True,
+        "memoryReservation": 128,
+        "command": ["replicate", "-config", "/etc/litestream.yml"],
+        "stopTimeout": 60,
+        "mountPoints": [
+            {"sourceVolume": "netbird-data", "containerPath": "/var/lib/netbird"},
+            {
+                "sourceVolume": "litestream-config",
+                "containerPath": "/etc/litestream.yml",
+                "readOnly": True,
+            },
+        ],
+        "logConfiguration": log_config("litestream"),
+    },
+    {
+        "name": "netbird-server",
+        "image": netbird_image,
+        "essential": True,
+        "memoryReservation": 768,
+        "command": ["--config", "/etc/netbird/config.yaml"],
+        "dependsOn": [{"containerName": "litestream", "condition": "START"}],
+        "portMappings": [
+            {"containerPort": 3478, "hostPort": 3478, "protocol": "udp"},
+        ],
+        "mountPoints": [
+            {"sourceVolume": "netbird-data", "containerPath": "/var/lib/netbird"},
+            {
+                "sourceVolume": "netbird-config",
+                "containerPath": "/etc/netbird/config.yaml",
+                "readOnly": True,
+            },
+        ],
+        "dockerLabels": {
+            "traefik.enable": "true",
+            "traefik.http.routers.netbird-grpc.rule": f"Host(`{domain}`) && ({grpc_paths})",
+            "traefik.http.routers.netbird-grpc.entrypoints": "websecure",
+            "traefik.http.routers.netbird-grpc.tls": "true",
+            "traefik.http.routers.netbird-grpc.tls.certresolver": "letsencrypt",
+            "traefik.http.routers.netbird-grpc.service": "netbird-server-h2c",
+            "traefik.http.routers.netbird-grpc.priority": "100",
+            "traefik.http.routers.netbird-backend.rule": f"Host(`{domain}`) && ({backend_paths})",
+            "traefik.http.routers.netbird-backend.entrypoints": "websecure",
+            "traefik.http.routers.netbird-backend.tls": "true",
+            "traefik.http.routers.netbird-backend.tls.certresolver": "letsencrypt",
+            "traefik.http.routers.netbird-backend.service": "netbird-server",
+            "traefik.http.routers.netbird-backend.priority": "100",
+            "traefik.http.services.netbird-server.loadbalancer.server.port": "80",
+            "traefik.http.services.netbird-server-h2c.loadbalancer.server.port": "80",
+            "traefik.http.services.netbird-server-h2c.loadbalancer.server.scheme": "h2c",
+        },
+        "logConfiguration": log_config("server"),
+    },
+]
+
+task_definition = aws.ecs.TaskDefinition(
+    "task",
+    family=NAME,
+    network_mode="bridge",
+    requires_compatibilities=["EC2"],
+    execution_role_arn=execution_role.arn,
+    task_role_arn=task_role.arn,
+    runtime_platform={"cpu_architecture": "ARM64", "operating_system_family": "LINUX"},
+    volumes=[
+        {"name": "netbird-data", "host_path": f"{NB_DIR}/data"},
+        {"name": "letsencrypt", "host_path": f"{NB_DIR}/letsencrypt"},
+        {"name": "netbird-config", "host_path": f"{NB_DIR}/config.yaml"},
+        {"name": "litestream-config", "host_path": f"{NB_DIR}/litestream.yml"},
+        {"name": "docker-socket", "host_path": "/var/run/docker.sock"},
+    ],
+    container_definitions=json.dumps(containers),
+    tags={**tags, "Name": NAME},
+    opts=pulumi.ResourceOptions(depends_on=[ecs_logs]),
+)
+
+service = aws.ecs.Service(
+    "service",
+    name=NAME,
+    cluster=cluster.arn,
+    task_definition=task_definition.arn,
+    desired_count=1,
+    deployment_minimum_healthy_percent=0,
+    deployment_maximum_percent=100,
+    capacity_provider_strategies=[{"capacity_provider": capacity_provider.name, "weight": 1}],
+    tags={**tags, "Name": NAME},
+)
+
+standby = aws.ec2.Instance(
+    "standby",
+    ami=ami,
+    instance_type=standby_instance_type,
+    subnet_id=standby_subnet.id,
+    vpc_security_group_ids=[sg.id],
+    iam_instance_profile=instance_profile.name,
+    key_name=key_pair.key_name,
+    user_data=standby_user_data,
+    user_data_replace_on_change=False,
+    metadata_options={"http_endpoint": "enabled", "http_tokens": "required"},
+    root_block_device={
+        "volume_type": "gp3",
+        "volume_size": root_volume_size,
+        "encrypted": True,
+        "delete_on_termination": True,
+    },
+    tags={**tags, "Name": STANDBY_NAME},
 )
 
 
@@ -496,47 +833,44 @@ aws.iam.RolePolicyAttachment(
 aws.iam.RolePolicy(
     "failover-lambda-policy",
     role=failover_role.name,
-    policy=pulumi.Output.all(asg.arn, alerts.arn, region).apply(
+    policy=pulumi.Output.all(cluster.arn, alerts.arn).apply(
         lambda a: json.dumps(
             {
                 "Version": "2012-10-17",
                 "Statement": [
                     {
                         "Effect": "Allow",
-                        "Action": "autoscaling:DescribeAutoScalingGroups",
-                        "Resource": "*",
-                    },
-                    {
-                        "Effect": "Allow",
-                        "Action": "autoscaling:SetDesiredCapacity",
+                        "Action": [
+                            "ecs:ListContainerInstances",
+                            "ecs:ListTasks",
+                        ],
                         "Resource": a[0],
                     },
                     {
                         "Effect": "Allow",
-                        "Action": "ec2:DescribeInstances",
+                        "Action": [
+                            "ecs:DescribeContainerInstances",
+                            "ecs:DescribeTasks",
+                            "ecs:UpdateContainerInstancesState",
+                        ],
+                        "Resource": "*",
+                        "Condition": {"ArnEquals": {"ecs:cluster": a[0]}},
+                    },
+                    {
+                        "Effect": "Allow",
+                        "Action": ["ec2:DescribeInstances", "ec2:DescribeAddresses"],
+                        "Resource": "*",
+                    },
+                    {
+                        "Effect": "Allow",
+                        "Action": "ec2:AssociateAddress",
                         "Resource": "*",
                     },
                     {
                         "Effect": "Allow",
                         "Action": ["ec2:StartInstances", "ec2:StopInstances"],
                         "Resource": "*",
-                        "Condition": {"StringEquals": {"ec2:ResourceTag/Name": f"{NAME}-standby"}},
-                    },
-                    {
-                        "Effect": "Allow",
-                        "Action": "ssm:SendCommand",
-                        "Resource": f"arn:aws:ssm:{a[2]}::document/AWS-RunShellScript",
-                    },
-                    {
-                        "Effect": "Allow",
-                        "Action": "ssm:SendCommand",
-                        "Resource": "arn:aws:ec2:*:*:instance/*",
-                        "Condition": {"StringEquals": {"ssm:resourceTag/App": "5tmate"}},
-                    },
-                    {
-                        "Effect": "Allow",
-                        "Action": "ssm:GetCommandInvocation",
-                        "Resource": "*",
+                        "Condition": {"StringEquals": {"ec2:ResourceTag/Name": STANDBY_NAME}},
                     },
                     {"Effect": "Allow", "Action": "sns:Publish", "Resource": a[1]},
                 ],
@@ -557,8 +891,10 @@ failover = aws.lambda_.Function(
     reserved_concurrent_executions=1,
     environment={
         "variables": {
-            "ASG_NAME": NAME,
-            "STANDBY_NAME": f"{NAME}-standby",
+            "CLUSTER": NAME,
+            "SERVICE": NAME,
+            "STANDBY_NAME": STANDBY_NAME,
+            "EIP_ALLOC": eip.id,
             "DOMAIN": domain,
             "HEALTH_PATH": "/oauth2",
             "NO_CAPACITY_ALARM": f"{NAME}-no-capacity",
