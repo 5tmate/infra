@@ -30,7 +30,9 @@ spot_max_price = config.get("spot_max_price")
 desired_capacity = config.get_int("desired_capacity")
 if desired_capacity is None:
     desired_capacity = 1
-capacity_alarm_periods = config.get_int("capacity_alarm_periods") or 5
+no_capacity_datapoints = config.get_int("no_capacity_datapoints") or 15
+no_capacity_periods = no_capacity_datapoints + 5
+capacity_stable_periods = config.get_int("capacity_stable_periods") or 6
 
 domain = f"{hostname}.{zone_name}"
 
@@ -344,7 +346,7 @@ aws.sns.TopicPolicy(
 )
 
 
-aws.cloudwatch.MetricAlarm(
+no_capacity = aws.cloudwatch.MetricAlarm(
     "no-capacity",
     name=f"{NAME}-no-capacity",
     namespace="AWS/AutoScaling",
@@ -352,13 +354,36 @@ aws.cloudwatch.MetricAlarm(
     dimensions={"AutoScalingGroupName": asg.name},
     statistic="Maximum",
     period=60,
-    evaluation_periods=capacity_alarm_periods,
+    evaluation_periods=no_capacity_periods,
+    datapoints_to_alarm=no_capacity_datapoints,
     threshold=1,
     comparison_operator="LessThanThreshold",
     treat_missing_data="breaching",
-    alarm_description="the group has been without a running instance",
+    alarm_description=(
+        f"{no_capacity_datapoints} of the last {no_capacity_periods} minutes "
+        "had no running instance, fail over to the standby"
+    ),
     alarm_actions=[alerts.arn],
-    ok_actions=[alerts.arn],
+    tags={**tags, "Name": NAME},
+)
+
+capacity_stable = aws.cloudwatch.MetricAlarm(
+    "capacity-stable",
+    name=f"{NAME}-capacity-stable",
+    namespace="AWS/AutoScaling",
+    metric_name="GroupInServiceInstances",
+    dimensions={"AutoScalingGroupName": asg.name},
+    statistic="Maximum",
+    period=60,
+    evaluation_periods=capacity_stable_periods,
+    datapoints_to_alarm=capacity_stable_periods,
+    threshold=1,
+    comparison_operator="GreaterThanOrEqualToThreshold",
+    treat_missing_data="notBreaching",
+    alarm_description=(
+        f"the group has had a running instance for {capacity_stable_periods} "
+        "consecutive minutes, fail back to the primary"
+    ),
     tags={**tags, "Name": NAME},
 )
 
@@ -408,6 +433,32 @@ asg_events = aws.cloudwatch.EventRule(
 aws.cloudwatch.EventTarget(
     "asg-events-log",
     rule=asg_events.name,
+    target_id="log",
+    arn=event_log.arn,
+)
+
+alarm_events = aws.cloudwatch.EventRule(
+    "alarm-events",
+    name=f"{NAME}-alarm-events",
+    description="either failover alarm entering ALARM",
+    event_pattern=pulumi.Output.all(no_capacity.name, capacity_stable.name).apply(
+        lambda names: json.dumps(
+            {
+                "source": ["aws.cloudwatch"],
+                "detail-type": ["CloudWatch Alarm State Change"],
+                "detail": {
+                    "alarmName": list(names),
+                    "state": {"value": ["ALARM"]},
+                },
+            }
+        )
+    ),
+    tags={**tags, "Name": NAME},
+)
+
+aws.cloudwatch.EventTarget(
+    "alarm-events-log",
+    rule=alarm_events.name,
     target_id="log",
     arn=event_log.arn,
 )
