@@ -137,8 +137,12 @@ fi
 
 DATA_DIR=$(data_dir)
 write_litestream_config "$DATA_DIR"
+
+systemctl stop litestream || true
+docker compose stop
+
 for db in $DBS; do
-  litestream restore -config /etc/litestream.yml -integrity-check full "${DATA_DIR}/${db}.db"
+  litestream restore -config /etc/litestream.yml -integrity-check full -force "${DATA_DIR}/${db}.db"
 done
 SCRIPT
 chmod +x /usr/local/bin/netbird-prepare
@@ -147,6 +151,8 @@ cat > /usr/local/bin/netbird-takeover <<'SCRIPT'
 #!/bin/bash
 set -euxo pipefail
 . /usr/local/lib/netbird-common.sh
+
+/usr/local/bin/netbird-prepare
 
 claim_eip
 
@@ -283,11 +289,10 @@ if ! aws s3 ls "s3://${BUCKET}/config/config.yaml" --region "$REGION" >/dev/null
   exit 0
 fi
 
-/usr/local/bin/netbird-prepare
-
 STATE=$(standby_state)
 case "$STATE" in
   pending | running | stopping)
+    /usr/local/bin/netbird-prepare
     echo "standby is ${STATE}; prepared but not serving" ;;
   *)
     /usr/local/bin/netbird-takeover ;;

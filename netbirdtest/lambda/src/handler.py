@@ -150,13 +150,17 @@ def fail_over(context):
 
     log.info("fencing the group, standby %s is %s", instance_id, state)
     set_desired(0)
-    wait_asg_empty(context, budget=240)
-
-    log.info("starting standby %s", instance_id)
-    ec2.start_instances(InstanceIds=[instance_id])
-    ec2.get_waiter("instance_running").wait(
-        InstanceIds=[instance_id], WaiterConfig={"Delay": 10, "MaxAttempts": 30}
-    )
+    try:
+        wait_asg_empty(context, budget=240)
+        log.info("starting standby %s", instance_id)
+        ec2.start_instances(InstanceIds=[instance_id])
+        ec2.get_waiter("instance_running").wait(
+            InstanceIds=[instance_id], WaiterConfig={"Delay": 10, "MaxAttempts": 30}
+        )
+    except Exception:
+        log.exception("could not hand over to the standby, unfencing the group")
+        set_desired(1)
+        raise
 
     served = wait_healthy(context, budget=420)
     log.info("unfencing the group")
