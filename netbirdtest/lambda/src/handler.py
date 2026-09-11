@@ -67,6 +67,10 @@ def container_instances():
     return {c["ec2InstanceId"]: c for c in described}
 
 
+def usable(container_instance):
+    return container_instance["status"] == "ACTIVE" and container_instance.get("agentConnected")
+
+
 def running_task_host():
     arns = ecs.list_tasks(cluster=CLUSTER, serviceName=SERVICE, desiredStatus="RUNNING")["taskArns"]
     if not arns:
@@ -145,9 +149,11 @@ def fail_over(context):
     deadline = time.time() + min(300, remaining(context) - 240)
     arn = None
     while time.time() < deadline:
-        arn = (container_instances().get(instance_id) or {}).get("containerInstanceArn")
-        if arn:
+        found = container_instances().get(instance_id)
+        if found and usable(found):
+            arn = found["containerInstanceArn"]
             break
+        log.info("standby %s has not reconnected to the cluster yet", instance_id)
         time.sleep(10)
     if not arn:
         raise Failed(f"standby {instance_id} never joined the cluster")
@@ -171,7 +177,7 @@ def fail_back(context):
     if running_task_host() != standby_arn:
         return "the task is not on the standby, nothing to do"
 
-    primary = [c for i, c in hosts.items() if i != instance_id and c["status"] == "ACTIVE"]
+    primary = [c for i, c in hosts.items() if i != instance_id and usable(c)]
     if not primary:
         return "no other container instance to hand back to, staying on the standby"
     primary_id = primary[0]["ec2InstanceId"]
