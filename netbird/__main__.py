@@ -592,5 +592,29 @@ service = aws.ecs.Service(
     deployment_minimum_healthy_percent=0,
     deployment_maximum_percent=100,
     launch_type="EC2",
+    wait_for_steady_state=True,
     tags={**tags, "Name": NAME},
+)
+
+
+standby = aws.ec2.Instance(
+    "standby",
+    ami=ami,
+    instance_type="t4g.small",
+    subnet_id=standby_subnet.id,
+    vpc_security_group_ids=[sg.id],
+    iam_instance_profile=instance_profile.name,
+    user_data=standby_user_data,
+    user_data_replace_on_change=False,
+    metadata_options={"http_endpoint": "enabled", "http_tokens": "required"},
+    root_block_device={
+        "volume_type": "gp3",
+        "volume_size": ROOT_VOLUME_SIZE,
+        "encrypted": True,
+        "delete_on_termination": True,
+    },
+    tags={**tags, "Name": STANDBY_NAME},
+    opts=pulumi.ResourceOptions(
+        depends_on=[netbird_config, traefik_config, backup_access, service]
+    ),
 )
