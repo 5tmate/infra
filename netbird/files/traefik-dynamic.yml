@@ -1,0 +1,49 @@
+http:
+  routers:
+    netbird-dashboard:
+      rule: "Host(`__DOMAIN__`)"
+      entryPoints:
+        - websecure
+      service: dashboard
+      priority: 1
+      tls:
+        certResolver: letsencrypt
+
+    netbird-grpc:
+      rule: >-
+        Host(`__DOMAIN__`) && (PathPrefix(`/signalexchange.SignalExchange/`)
+        || PathPrefix(`/management.ManagementService/`)
+        || PathPrefix(`/management.ProxyService/`))
+      entryPoints:
+        - websecure
+      service: netbird-server-h2c
+      priority: 100
+      tls:
+        certResolver: letsencrypt
+
+    netbird-backend:
+      rule: >-
+        Host(`__DOMAIN__`) && (PathPrefix(`/relay`) || PathPrefix(`/ws-proxy/`)
+        || PathPrefix(`/api`) || PathPrefix(`/oauth2`))
+      entryPoints:
+        - websecure
+      service: netbird-server
+      priority: 100
+      tls:
+        certResolver: letsencrypt
+
+  services:
+    dashboard:
+      loadBalancer:
+        servers:
+          - url: "http://dashboard:80"
+
+    netbird-server:
+      loadBalancer:
+        servers:
+          - url: "http://netbird-server:80"
+
+    netbird-server-h2c:
+      loadBalancer:
+        servers:
+          - url: "h2c://netbird-server:80"

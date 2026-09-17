@@ -39,6 +39,8 @@ install -d "${NB_DIR}/data" "${NB_DIR}/letsencrypt"
 retry aws s3 cp "s3://${BUCKET}/config/config.yaml" "${NB_DIR}/config.yaml" --region "$REGION"
 chmod 600 "${NB_DIR}/config.yaml"
 
+retry aws s3 cp "s3://${BUCKET}/config/traefik-dynamic.yml" "${NB_DIR}/traefik-dynamic.yml" --region "$REGION"
+
 if aws s3 ls "s3://${BUCKET}/config/acme.json" --region "$REGION" >/dev/null 2>&1; then
   retry aws s3 cp "s3://${BUCKET}/config/acme.json" "${NB_DIR}/letsencrypt/acme.json" --region "$REGION"
   chmod 600 "${NB_DIR}/letsencrypt/acme.json"

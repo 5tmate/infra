@@ -207,9 +207,7 @@ netbird_config = aws.s3.BucketObject(
     "config-yaml",
     bucket=backup_bucket.id,
     key="config/config.yaml",
-    content=pulumi.Output.all(
-        auth_secret.base64, session_key.base64, store_key.base64
-    ).apply(
+    content=pulumi.Output.all(auth_secret.base64, session_key.base64, store_key.base64).apply(
         lambda v: (
             _config_template.replace("__DOMAIN__", domain)
             .replace("__AUTH_SECRET__", v[0])
@@ -217,6 +215,16 @@ netbird_config = aws.s3.BucketObject(
             .replace("__ENCRYPTION_KEY__", v[2])
         )
     ),
+    opts=pulumi.ResourceOptions(delete_before_replace=True),
+)
+
+_traefik_template = (Path(__file__).parent / "files" / "traefik-dynamic.yml").read_text()
+
+traefik_config = aws.s3.BucketObject(
+    "traefik-dynamic",
+    bucket=backup_bucket.id,
+    key="config/traefik-dynamic.yml",
+    content=_traefik_template.replace("__DOMAIN__", domain),
     opts=pulumi.ResourceOptions(delete_before_replace=True),
 )
 
@@ -297,7 +305,7 @@ launch_template = aws.ec2.LaunchTemplate(
     ],
     user_data=base64.b64encode(user_data.encode()).decode(),
     update_default_version=True,
-    opts=pulumi.ResourceOptions(depends_on=[netbird_config, backup_access]),
+    opts=pulumi.ResourceOptions(depends_on=[netbird_config, traefik_config, backup_access]),
     tag_specifications=[
         {"resource_type": "instance", "tags": {**tags, "Name": NAME}},
         {"resource_type": "volume", "tags": {**tags, "Name": NAME}},
@@ -335,4 +343,254 @@ asg = aws.autoscaling.Group(
         {"key": k, "value": v, "propagate_at_launch": True}
         for k, v in {**tags, "Name": NAME}.items()
     ],
+)
+
+
+cluster = aws.ecs.Cluster("cluster", name=NAME, tags={**tags, "Name": NAME})
+
+ecs_logs = aws.cloudwatch.LogGroup(
+    "ecs-logs",
+    name=f"/ecs/{NAME}",
+    retention_in_days=14,
+    tags={**tags, "Name": NAME},
+)
+
+capacity_provider = aws.ecs.CapacityProvider(
+    "capacity",
+    name=NAME,
+    auto_scaling_group_provider={
+        "auto_scaling_group_arn": asg.arn,
+        "managed_termination_protection": "DISABLED",
+        "managed_scaling": {"status": "DISABLED"},
+    },
+    tags={**tags, "Name": NAME},
+)
+
+aws.ecs.ClusterCapacityProviders(
+    "cluster-capacity",
+    cluster_name=cluster.name,
+    capacity_providers=[capacity_provider.name],
+    default_capacity_provider_strategies=[
+        {"capacity_provider": capacity_provider.name, "weight": 1}
+    ],
+)
+
+execution_role = aws.iam.Role(
+    "ecs-execution",
+    name=f"{NAME}-ecs-execution",
+    assume_role_policy=json.dumps(
+        {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Effect": "Allow",
+                    "Action": "sts:AssumeRole",
+                    "Principal": {"Service": "ecs-tasks.amazonaws.com"},
+                }
+            ],
+        }
+    ),
+    tags={**tags, "Name": NAME},
+)
+
+aws.iam.RolePolicyAttachment(
+    "ecs-execution-managed",
+    role=execution_role.name,
+    policy_arn="arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy",
+)
+
+task_role = aws.iam.Role(
+    "ecs-task",
+    name=f"{NAME}-ecs-task",
+    assume_role_policy=json.dumps(
+        {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Effect": "Allow",
+                    "Action": "sts:AssumeRole",
+                    "Principal": {"Service": "ecs-tasks.amazonaws.com"},
+                }
+            ],
+        }
+    ),
+    tags={**tags, "Name": NAME},
+)
+
+aws.iam.RolePolicy(
+    "ecs-task-litestream",
+    role=task_role.name,
+    policy=backup_bucket.arn.apply(
+        lambda arn: json.dumps(
+            {
+                "Version": "2012-10-17",
+                "Statement": [
+                    {
+                        "Effect": "Allow",
+                        "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+                        "Resource": f"{arn}/*",
+                    },
+                    {
+                        "Effect": "Allow",
+                        "Action": ["s3:ListBucket", "s3:GetBucketLocation"],
+                        "Resource": arn,
+                    },
+                ],
+            }
+        )
+    ),
+)
+
+
+def log_config(stream):
+    return {
+        "logDriver": "awslogs",
+        "options": {
+            "awslogs-group": f"/ecs/{NAME}",
+            "awslogs-region": region,
+            "awslogs-stream-prefix": stream,
+        },
+    }
+
+
+containers = [
+    {
+        "name": "traefik",
+        "image": "traefik:v3.6",
+        "essential": True,
+        "memoryReservation": 128,
+        "command": [
+            "--log.level=INFO",
+            "--accesslog=true",
+            "--providers.file.filename=/etc/traefik/dynamic.yml",
+            "--entrypoints.web.address=:80",
+            "--entrypoints.websecure.address=:443",
+            "--entrypoints.websecure.allowACMEByPass=true",
+            "--entrypoints.websecure.transport.respondingTimeouts.readTimeout=0",
+            "--entrypoints.websecure.transport.respondingTimeouts.writeTimeout=0",
+            "--entrypoints.websecure.transport.respondingTimeouts.idleTimeout=0",
+            "--entrypoints.web.http.redirections.entrypoint.to=websecure",
+            "--entrypoints.web.http.redirections.entrypoint.scheme=https",
+            f"--certificatesresolvers.letsencrypt.acme.email=admin@{zone_name}",
+            "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json",
+            "--certificatesresolvers.letsencrypt.acme.tlschallenge=true",
+            "--serverstransport.forwardingtimeouts.responseheadertimeout=0s",
+            "--serverstransport.forwardingtimeouts.idleconntimeout=0s",
+        ],
+        "portMappings": [
+            {"containerPort": 80, "hostPort": 80, "protocol": "tcp"},
+            {"containerPort": 443, "hostPort": 443, "protocol": "tcp"},
+        ],
+        "mountPoints": [
+            {"sourceVolume": "letsencrypt", "containerPath": "/letsencrypt"},
+            {
+                "sourceVolume": "traefik-dynamic",
+                "containerPath": "/etc/traefik/dynamic.yml",
+                "readOnly": True,
+            },
+        ],
+        "links": ["dashboard", "netbird-server"],
+        "dependsOn": [
+            {"containerName": "dashboard", "condition": "START"},
+            {"containerName": "netbird-server", "condition": "START"},
+        ],
+        "logConfiguration": log_config("traefik"),
+    },
+    {
+        "name": "dashboard",
+        "image": "netbirdio/dashboard:latest",
+        "essential": True,
+        "memoryReservation": 128,
+        "environment": [
+            {"name": "NETBIRD_MGMT_API_ENDPOINT", "value": f"https://{domain}"},
+            {
+                "name": "NETBIRD_MGMT_GRPC_API_ENDPOINT",
+                "value": f"https://{domain}",
+            },
+            {"name": "AUTH_AUDIENCE", "value": "netbird-dashboard"},
+            {"name": "AUTH_CLIENT_ID", "value": "netbird-dashboard"},
+            {"name": "AUTH_CLIENT_SECRET", "value": ""},
+            {"name": "AUTH_AUTHORITY", "value": f"https://{domain}/oauth2"},
+            {"name": "USE_AUTH0", "value": "false"},
+            {
+                "name": "AUTH_SUPPORTED_SCOPES",
+                "value": "openid profile email groups",
+            },
+            {"name": "AUTH_REDIRECT_URI", "value": "/nb-auth"},
+            {"name": "AUTH_SILENT_REDIRECT_URI", "value": "/nb-silent-auth"},
+            {"name": "NGINX_SSL_PORT", "value": "443"},
+            {"name": "LETSENCRYPT_DOMAIN", "value": "none"},
+        ],
+        "logConfiguration": log_config("dashboard"),
+    },
+    {
+        "name": "litestream",
+        "image": LITESTREAM_IMAGE,
+        "essential": True,
+        "memoryReservation": 128,
+        "command": ["replicate", "-config", "/etc/litestream.yml"],
+        "stopTimeout": 60,
+        "mountPoints": [
+            {"sourceVolume": "netbird-data", "containerPath": "/var/lib/netbird"},
+            {
+                "sourceVolume": "litestream-config",
+                "containerPath": "/etc/litestream.yml",
+                "readOnly": True,
+            },
+        ],
+        "logConfiguration": log_config("litestream"),
+    },
+    {
+        "name": "netbird-server",
+        "image": "netbirdio/netbird-server:latest",
+        "essential": True,
+        "memoryReservation": 768,
+        "command": ["--config", "/etc/netbird/config.yaml"],
+        "dependsOn": [{"containerName": "litestream", "condition": "START"}],
+        "portMappings": [
+            {"containerPort": 3478, "hostPort": 3478, "protocol": "udp"},
+        ],
+        "mountPoints": [
+            {"sourceVolume": "netbird-data", "containerPath": "/var/lib/netbird"},
+            {
+                "sourceVolume": "netbird-config",
+                "containerPath": "/etc/netbird/config.yaml",
+                "readOnly": True,
+            },
+        ],
+        "logConfiguration": log_config("server"),
+    },
+]
+
+
+task_definition = aws.ecs.TaskDefinition(
+    "task",
+    family=NAME,
+    network_mode="bridge",
+    requires_compatibilities=["EC2"],
+    execution_role_arn=execution_role.arn,
+    task_role_arn=task_role.arn,
+    runtime_platform={"cpu_architecture": "ARM64", "operating_system_family": "LINUX"},
+    volumes=[
+        {"name": "netbird-data", "host_path": f"{NB_DIR}/data"},
+        {"name": "letsencrypt", "host_path": f"{NB_DIR}/letsencrypt"},
+        {"name": "netbird-config", "host_path": f"{NB_DIR}/config.yaml"},
+        {"name": "litestream-config", "host_path": f"{NB_DIR}/litestream.yml"},
+        {"name": "traefik-dynamic", "host_path": f"{NB_DIR}/traefik-dynamic.yml"},
+    ],
+    container_definitions=json.dumps(containers),
+    tags={**tags, "Name": NAME},
+    opts=pulumi.ResourceOptions(depends_on=[ecs_logs]),
+)
+
+service = aws.ecs.Service(
+    "service",
+    name=NAME,
+    cluster=cluster.arn,
+    task_definition=task_definition.arn,
+    desired_count=1,
+    deployment_minimum_healthy_percent=0,
+    deployment_maximum_percent=100,
+    launch_type="EC2",
+    tags={**tags, "Name": NAME},
 )
