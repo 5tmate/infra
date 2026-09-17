@@ -1,0 +1,30 @@
+server:
+  listenAddress: ":80"
+  exposedAddress: "https://__DOMAIN__:443"
+  stunPorts:
+    - 3478
+  metricsPort: 9090
+  healthcheckAddress: "127.0.0.1:9000"
+  logLevel: "info"
+  logFile: "console"
+
+  authSecret: "__AUTH_SECRET__"
+  dataDir: "/var/lib/netbird"
+
+  auth:
+    issuer: "https://__DOMAIN__/oauth2"
+    signKeyRefreshEnabled: true
+    sessionCookieEncryptionKey: "__SESSION_KEY__"
+    dashboardRedirectURIs:
+      - "https://__DOMAIN__/nb-auth"
+      - "https://__DOMAIN__/nb-silent-auth"
+    cliRedirectURIs:
+      - "http://localhost:53000/"
+
+  reverseProxy:
+    trustedHTTPProxies:
+      - "172.16.0.0/12"
+
+  store:
+    engine: sqlite
+    encryptionKey: "__ENCRYPTION_KEY__"
