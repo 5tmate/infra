@@ -15,7 +15,7 @@ NAME = "5tmate-netbird"
 STANDBY_NAME = f"{NAME}-standby"
 BACKUP_BUCKET = f"{NAME}-backup"
 NB_DIR = "/opt/netbird"
-ROOT_VOLUME_SIZE = 30
+ROOT_VOLUME_SIZE = 16
 LITESTREAM_IMAGE = "litestream/litestream:0.5.17"
 AMI_PARAMETER = "/aws/service/ecs/optimized-ami/amazon-linux-2023/arm64/recommended/image_id"
 
@@ -617,4 +617,16 @@ standby = aws.ec2.Instance(
     opts=pulumi.ResourceOptions(
         depends_on=[netbird_config, traefik_config, backup_access, service]
     ),
+)
+
+
+zone = aws.route53.get_zone(name=zone_name, private_zone=False)
+
+aws.route53.Record(
+    "a",
+    zone_id=zone.zone_id,
+    name=domain,
+    type="A",
+    ttl=60,
+    records=[eip.public_ip],
 )
