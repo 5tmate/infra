@@ -746,3 +746,196 @@ aws.cloudwatch.EventTarget(
     target_id="log",
     arn=event_log.arn,
 )
+
+alarm_events = aws.cloudwatch.EventRule(
+    "alarm-events",
+    name=f"{NAME}-alarm-events",
+    description="either failover alarm entering ALARM",
+    event_pattern=pulumi.Output.all(no_capacity.name, capacity_stable.name).apply(
+        lambda names: json.dumps(
+            {
+                "source": ["aws.cloudwatch"],
+                "detail-type": ["CloudWatch Alarm State Change"],
+                "detail": {
+                    "alarmName": list(names),
+                    "state": {"value": ["ALARM"]},
+                },
+            }
+        )
+    ),
+    tags={**tags, "Name": NAME},
+)
+
+aws.cloudwatch.EventTarget(
+    "alarm-events-log",
+    rule=alarm_events.name,
+    target_id="log",
+    arn=event_log.arn,
+)
+
+
+failover_role = aws.iam.Role(
+    "failover-lambda",
+    name=f"{NAME}-failover-lambda",
+    assume_role_policy=json.dumps(
+        {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Effect": "Allow",
+                    "Action": "sts:AssumeRole",
+                    "Principal": {"Service": "lambda.amazonaws.com"},
+                }
+            ],
+        }
+    ),
+    tags={**tags, "Name": NAME},
+)
+
+aws.iam.RolePolicyAttachment(
+    "failover-lambda-logs",
+    role=failover_role.name,
+    policy_arn="arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+)
+
+aws.iam.RolePolicy(
+    "failover-lambda-policy",
+    role=failover_role.name,
+    policy=pulumi.Output.all(cluster.arn, alerts.arn).apply(
+        lambda a: json.dumps(
+            {
+                "Version": "2012-10-17",
+                "Statement": [
+                    {
+                        "Effect": "Allow",
+                        "Action": [
+                            "ecs:ListContainerInstances",
+                        ],
+                        "Resource": a[0],
+                    },
+                    {
+                        "Effect": "Allow",
+                        "Action": "ecs:ListTasks",
+                        "Resource": "*",
+                        "Condition": {"ArnEquals": {"ecs:cluster": a[0]}},
+                    },
+                    {
+                        "Effect": "Allow",
+                        "Action": [
+                            "ecs:DescribeContainerInstances",
+                            "ecs:DescribeTasks",
+                            "ecs:UpdateContainerInstancesState",
+                        ],
+                        "Resource": "*",
+                        "Condition": {"ArnEquals": {"ecs:cluster": a[0]}},
+                    },
+                    {
+                        "Effect": "Allow",
+                        "Action": ["ec2:DescribeInstances", "ec2:DescribeAddresses"],
+                        "Resource": "*",
+                    },
+                    {
+                        "Effect": "Allow",
+                        "Action": "ec2:AssociateAddress",
+                        "Resource": "*",
+                    },
+                    {
+                        "Effect": "Allow",
+                        "Action": ["ec2:StartInstances", "ec2:StopInstances"],
+                        "Resource": "*",
+                        "Condition": {"StringEquals": {"ec2:ResourceTag/Name": STANDBY_NAME}},
+                    },
+                    {"Effect": "Allow", "Action": "sns:Publish", "Resource": a[1]},
+                ],
+            }
+        )
+    ),
+)
+
+failover = aws.lambda_.Function(
+    "failover",
+    name=f"{NAME}-failover",
+    role=failover_role.arn,
+    runtime="python3.12",
+    handler="handler.handler",
+    code=pulumi.FileArchive(str(Path(__file__).parent / "lambda" / "src")),
+    timeout=870,
+    memory_size=256,
+    reserved_concurrent_executions=1,
+    environment={
+        "variables": {
+            "CLUSTER": NAME,
+            "SERVICE": NAME,
+            "STANDBY_NAME": STANDBY_NAME,
+            "EIP_ALLOC": eip.id,
+            "DOMAIN": domain,
+            "HEALTH_PATH": "/oauth2",
+            "NO_CAPACITY_ALARM": f"{NAME}-no-capacity",
+            "CAPACITY_STABLE_ALARM": f"{NAME}-capacity-stable",
+            "TOPIC_ARN": alerts.arn,
+        }
+    },
+    tags={**tags, "Name": NAME},
+)
+
+aws.cloudwatch.EventTarget(
+    "alarm-events-lambda",
+    rule=alarm_events.name,
+    target_id="failover",
+    arn=failover.arn,
+)
+
+task_events = aws.cloudwatch.EventRule(
+    "task-events",
+    name=f"{NAME}-task-events",
+    description="a task of this service reaching RUNNING",
+    event_pattern=cluster.arn.apply(
+        lambda arn: json.dumps(
+            {
+                "source": ["aws.ecs"],
+                "detail-type": ["ECS Task State Change"],
+                "detail": {
+                    "clusterArn": [arn],
+                    "group": [f"service:{NAME}"],
+                    "lastStatus": ["RUNNING"],
+                },
+            }
+        )
+    ),
+    tags={**tags, "Name": NAME},
+)
+
+aws.cloudwatch.EventTarget(
+    "task-events-lambda",
+    rule=task_events.name,
+    target_id="failover",
+    arn=failover.arn,
+)
+
+aws.lambda_.Permission(
+    "task-events-invoke",
+    action="lambda:InvokeFunction",
+    function=failover.name,
+    principal="events.amazonaws.com",
+    source_arn=task_events.arn,
+)
+
+aws.lambda_.Permission(
+    "alarm-events-invoke",
+    action="lambda:InvokeFunction",
+    function=failover.name,
+    principal="events.amazonaws.com",
+    source_arn=alarm_events.arn,
+)
+
+
+pulumi.export("asg_name", asg.name)
+pulumi.export("public_ip", eip.public_ip)
+pulumi.export("domain", domain)
+pulumi.export("dashboard_url", f"https://{domain}")
+pulumi.export("litestream_bucket", backup_bucket.bucket)
+pulumi.export("vpc_id", vpc.id)
+pulumi.export("security_group_id", sg.id)
+pulumi.export("alerts_topic_arn", alerts.arn)
+pulumi.export("failover_function", failover.name)
+pulumi.export("asg_event_log_group", event_log.name)
