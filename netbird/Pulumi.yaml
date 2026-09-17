@@ -1,0 +1,7 @@
+name: 5tmate-netbird
+runtime:
+  name: python
+  options:
+    toolchain: uv
+    virtualenv: .venv
+description: Self-hosted NetBird control plane
