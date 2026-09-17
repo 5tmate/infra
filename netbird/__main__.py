@@ -217,7 +217,7 @@ netbird_config = aws.s3.BucketObject(
             .replace("__ENCRYPTION_KEY__", v[2])
         )
     ),
-    opts=pulumi.ResourceOptions(ignore_changes=["content"], delete_before_replace=True),
+    opts=pulumi.ResourceOptions(delete_before_replace=True),
 )
 
 backup_access = aws.iam.RolePolicy(
