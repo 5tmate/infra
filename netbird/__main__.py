@@ -630,3 +630,118 @@ aws.route53.Record(
     ttl=60,
     records=[eip.public_ip],
 )
+
+
+alerts = aws.sns.Topic(
+    "alerts",
+    name=f"{NAME}-alerts",
+    tags={**tags, "Name": NAME},
+)
+
+aws.sns.TopicPolicy(
+    "alerts-policy",
+    arn=alerts.arn,
+    policy=alerts.arn.apply(
+        lambda arn: json.dumps(
+            {
+                "Version": "2012-10-17",
+                "Statement": [
+                    {
+                        "Effect": "Allow",
+                        "Principal": {"Service": "cloudwatch.amazonaws.com"},
+                        "Action": "sns:Publish",
+                        "Resource": arn,
+                    }
+                ],
+            }
+        )
+    ),
+)
+
+
+no_capacity = aws.cloudwatch.MetricAlarm(
+    "no-capacity",
+    name=f"{NAME}-no-capacity",
+    namespace="AWS/AutoScaling",
+    metric_name="GroupInServiceInstances",
+    dimensions={"AutoScalingGroupName": asg.name},
+    statistic="Maximum",
+    period=60,
+    evaluation_periods=20,
+    datapoints_to_alarm=15,
+    threshold=1,
+    comparison_operator="LessThanThreshold",
+    treat_missing_data="breaching",
+    alarm_description="15 of the last 20 minutes had no running instance, fail over to the standby",
+    alarm_actions=[alerts.arn],
+    tags={**tags, "Name": NAME},
+)
+
+capacity_stable = aws.cloudwatch.MetricAlarm(
+    "capacity-stable",
+    name=f"{NAME}-capacity-stable",
+    namespace="AWS/AutoScaling",
+    metric_name="GroupInServiceInstances",
+    dimensions={"AutoScalingGroupName": asg.name},
+    statistic="Maximum",
+    period=60,
+    evaluation_periods=6,
+    datapoints_to_alarm=6,
+    threshold=1,
+    comparison_operator="GreaterThanOrEqualToThreshold",
+    treat_missing_data="notBreaching",
+    alarm_description=(
+        "the group has had a running instance for 6 minutes, fail back to the primary"
+    ),
+    tags={**tags, "Name": NAME},
+)
+
+
+event_log = aws.cloudwatch.LogGroup(
+    "asg-events",
+    name=f"/aws/events/{NAME}",
+    retention_in_days=7,
+    tags={**tags, "Name": NAME},
+)
+
+aws.cloudwatch.LogResourcePolicy(
+    "asg-events-policy",
+    policy_name=f"{NAME}-asg-events",
+    policy_document=event_log.arn.apply(
+        lambda arn: json.dumps(
+            {
+                "Version": "2012-10-17",
+                "Statement": [
+                    {
+                        "Effect": "Allow",
+                        "Principal": {
+                            "Service": ["events.amazonaws.com", "delivery.logs.amazonaws.com"]
+                        },
+                        "Action": ["logs:CreateLogStream", "logs:PutLogEvents"],
+                        "Resource": f"{arn}:*",
+                    }
+                ],
+            }
+        )
+    ),
+)
+
+asg_events = aws.cloudwatch.EventRule(
+    "asg-events",
+    name=f"{NAME}-asg-events",
+    description="every scaling event this group emits",
+    event_pattern=json.dumps(
+        {
+            "source": ["aws.autoscaling"],
+            "detail": {"AutoScalingGroupName": [NAME]},
+        }
+    ),
+    tags={**tags, "Name": NAME},
+)
+
+aws.cloudwatch.EventTarget(
+    "asg-events-log",
+    rule=asg_events.name,
+    target_id="log",
+    arn=event_log.arn,
+)
