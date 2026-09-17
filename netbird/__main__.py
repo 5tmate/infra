@@ -242,3 +242,14 @@ backup_access = aws.iam.RolePolicy(
         )
     ),
 )
+
+
+ami = aws.ssm.get_parameter(name=AMI_PARAMETER).value
+region = aws.get_region().name
+
+
+eip = aws.ec2.Eip(
+    "eip",
+    domain="vpc",
+    tags={**tags, "Name": NAME},
+)
