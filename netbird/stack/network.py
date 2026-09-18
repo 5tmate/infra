@@ -78,21 +78,14 @@ sg = aws.ec2.SecurityGroup(
     description="netbird self-hosted control plane",
     ingress=[
         {
-            "description": "ACME http-01 challenge and redirect to HTTPS",
-            "protocol": "tcp",
-            "from_port": 80,
-            "to_port": 80,
-            "cidr_blocks": ["0.0.0.0/0"],
-        },
-        {
-            "description": "dashboard, management API and gRPC, signal, relay",
+            "description": "management gRPC, API, embedded IdP and relay",
             "protocol": "tcp",
             "from_port": 443,
             "to_port": 443,
             "cidr_blocks": ["0.0.0.0/0"],
         },
         {
-            "description": "coturn STUN/TURN",
+            "description": "embedded STUN",
             "protocol": "udp",
             "from_port": 3478,
             "to_port": 3478,
@@ -101,7 +94,7 @@ sg = aws.ec2.SecurityGroup(
     ],
     egress=[
         {
-            "description": "all outbound (SSM, image pull, ACME, peers)",
+            "description": "all outbound (SSM, image pull, Route53 for ACME, peers)",
             "protocol": "-1",
             "from_port": 0,
             "to_port": 0,

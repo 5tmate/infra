@@ -34,17 +34,13 @@ retry() {
   done
 }
 
-install -d "${NB_DIR}/data" "${NB_DIR}/letsencrypt"
+install -d "${NB_DIR}/data/letsencrypt"
 
 retry aws s3 cp "s3://${BUCKET}/config/config.yaml" "${NB_DIR}/config.yaml" --region "$REGION"
 chmod 600 "${NB_DIR}/config.yaml"
 
-retry aws s3 cp "s3://${BUCKET}/config/traefik-dynamic.yml" "${NB_DIR}/traefik-dynamic.yml" --region "$REGION"
-
-if aws s3 ls "s3://${BUCKET}/config/acme.json" --region "$REGION" >/dev/null 2>&1; then
-  retry aws s3 cp "s3://${BUCKET}/config/acme.json" "${NB_DIR}/letsencrypt/acme.json" --region "$REGION"
-  chmod 600 "${NB_DIR}/letsencrypt/acme.json"
-fi
+retry aws s3 sync "s3://${BUCKET}/config/letsencrypt/" "${NB_DIR}/data/letsencrypt/" --region "$REGION" --only-show-errors
+chmod -R go-rwx "${NB_DIR}/data/letsencrypt"
 
 cat > "${NB_DIR}/litestream.yml" <<YML
 dbs:
@@ -73,31 +69,31 @@ done
 PREPARE
 chmod +x /usr/local/bin/netbird-prepare
 
-cat > /usr/local/bin/netbird-backup-acme <<ACME
+cat > /usr/local/bin/netbird-backup-certs <<CERTS
 #!/bin/bash
 set -euo pipefail
 BUCKET=${BUCKET}
 REGION=${REGION}
 NB_DIR=${NB_DIR}
-ACME
+CERTS
 
-cat >> /usr/local/bin/netbird-backup-acme <<'ACME'
-CERT="${NB_DIR}/letsencrypt/acme.json"
-[ -s "$CERT" ] || exit 0
-aws s3 cp "$CERT" "s3://${BUCKET}/config/acme.json" --region "$REGION" --only-show-errors
-ACME
-chmod +x /usr/local/bin/netbird-backup-acme
+cat >> /usr/local/bin/netbird-backup-certs <<'CERTS'
+CERTS_DIR="${NB_DIR}/data/letsencrypt"
+[ -d "$CERTS_DIR" ] || exit 0
+aws s3 sync "$CERTS_DIR/" "s3://${BUCKET}/config/letsencrypt/" --region "$REGION" --only-show-errors
+CERTS
+chmod +x /usr/local/bin/netbird-backup-certs
 
-cat > /etc/systemd/system/netbird-backup-acme.service <<'UNIT'
+cat > /etc/systemd/system/netbird-backup-certs.service <<'UNIT'
 [Unit]
-Description=Copy the Let's Encrypt certificate to S3 so the next instance reuses it
+Description=Copy the Let's Encrypt certificate cache to S3 so the next instance reuses it
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/bin/netbird-backup-acme
+ExecStart=/usr/local/bin/netbird-backup-certs
 UNIT
 
-cat > /etc/systemd/system/netbird-backup-acme.timer <<'UNIT'
+cat > /etc/systemd/system/netbird-backup-certs.timer <<'UNIT'
 [Unit]
 Description=Hourly certificate backup
 
@@ -138,7 +134,7 @@ grep -q "^ECS_CLUSTER=" /etc/ecs/ecs.config 2>/dev/null || echo "ECS_CLUSTER=${C
 
 systemctl daemon-reload
 systemctl enable netbird-prepare.service
-systemctl enable --now netbird-backup-acme.timer
+systemctl enable --now netbird-backup-certs.timer
 systemctl start netbird-prepare.service
 
 if [ "$ROLE" = "standby" ]; then

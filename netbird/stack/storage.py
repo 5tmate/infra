@@ -4,7 +4,7 @@ import pulumi
 import pulumi_aws as aws
 import pulumi_random as random
 
-from .settings import BACKUP_BUCKET, NAME, ROOT, backup_force_destroy, domain, tags
+from .settings import BACKUP_BUCKET, NAME, ROOT, backup_force_destroy, domain, tags, zone_name
 
 ssm_role = aws.iam.Role(
     "ssm-role",
@@ -83,21 +83,12 @@ netbird_config = aws.s3.BucketObject(
     content=pulumi.Output.all(auth_secret.base64, session_key.base64, store_key.base64).apply(
         lambda v: (
             _config_template.replace("__DOMAIN__", domain)
+            .replace("__ZONE_NAME__", zone_name)
             .replace("__AUTH_SECRET__", v[0])
             .replace("__SESSION_KEY__", v[1])
             .replace("__ENCRYPTION_KEY__", v[2])
         )
     ),
-    opts=pulumi.ResourceOptions(delete_before_replace=True),
-)
-
-_traefik_template = (ROOT / "files" / "traefik-dynamic.yml").read_text()
-
-traefik_config = aws.s3.BucketObject(
-    "traefik-dynamic",
-    bucket=backup_bucket.id,
-    key="config/traefik-dynamic.yml",
-    content=_traefik_template.replace("__DOMAIN__", domain),
     opts=pulumi.ResourceOptions(delete_before_replace=True),
 )
 

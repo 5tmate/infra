@@ -1,4 +1,4 @@
-from .settings import LITESTREAM_IMAGE, NAME, domain, region, zone_name
+from .settings import LITESTREAM_IMAGE, NAME, domain, region
 
 
 def log_config(stream):
@@ -13,48 +13,6 @@ def log_config(stream):
 
 
 containers = [
-    {
-        "name": "traefik",
-        "image": "traefik:v3.6",
-        "essential": True,
-        "memoryReservation": 128,
-        "command": [
-            "--log.level=INFO",
-            "--accesslog=true",
-            "--providers.file.filename=/etc/traefik/dynamic.yml",
-            "--entrypoints.web.address=:80",
-            "--entrypoints.websecure.address=:443",
-            "--entrypoints.websecure.allowACMEByPass=true",
-            "--entrypoints.websecure.transport.respondingTimeouts.readTimeout=0",
-            "--entrypoints.websecure.transport.respondingTimeouts.writeTimeout=0",
-            "--entrypoints.websecure.transport.respondingTimeouts.idleTimeout=0",
-            "--entrypoints.web.http.redirections.entrypoint.to=websecure",
-            "--entrypoints.web.http.redirections.entrypoint.scheme=https",
-            f"--certificatesresolvers.letsencrypt.acme.email=admin@{zone_name}",
-            "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json",
-            "--certificatesresolvers.letsencrypt.acme.tlschallenge=true",
-            "--serverstransport.forwardingtimeouts.responseheadertimeout=0s",
-            "--serverstransport.forwardingtimeouts.idleconntimeout=0s",
-        ],
-        "portMappings": [
-            {"containerPort": 80, "hostPort": 80, "protocol": "tcp"},
-            {"containerPort": 443, "hostPort": 443, "protocol": "tcp"},
-        ],
-        "mountPoints": [
-            {"sourceVolume": "letsencrypt", "containerPath": "/letsencrypt"},
-            {
-                "sourceVolume": "traefik-dynamic",
-                "containerPath": "/etc/traefik/dynamic.yml",
-                "readOnly": True,
-            },
-        ],
-        "links": ["dashboard", "netbird-server"],
-        "dependsOn": [
-            {"containerName": "dashboard", "condition": "START"},
-            {"containerName": "netbird-server", "condition": "START"},
-        ],
-        "logConfiguration": log_config("traefik"),
-    },
     {
         "name": "dashboard",
         "image": "netbirdio/dashboard:latest",
@@ -105,8 +63,10 @@ containers = [
         "essential": True,
         "memoryReservation": 768,
         "command": ["--config", "/etc/netbird/config.yaml"],
+        "environment": [{"name": "AWS_REGION", "value": region}],
         "dependsOn": [{"containerName": "litestream", "condition": "START"}],
         "portMappings": [
+            {"containerPort": 443, "hostPort": 443, "protocol": "tcp"},
             {"containerPort": 3478, "hostPort": 3478, "protocol": "udp"},
         ],
         "mountPoints": [

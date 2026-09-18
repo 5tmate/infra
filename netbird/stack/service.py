@@ -8,7 +8,7 @@ from .failover import task_events_invoke, task_events_target
 from .machine import ami, cluster, ecs_logs, eip, standby_user_data
 from .network import sg, standby_subnet
 from .settings import NAME, NB_DIR, ROOT_VOLUME_SIZE, STANDBY_NAME, domain, tags, zone_name
-from .storage import backup_access, backup_bucket, instance_profile, netbird_config, traefik_config
+from .storage import backup_access, backup_bucket, instance_profile, netbird_config
 
 execution_role = aws.iam.Role(
     "ecs-execution",
@@ -76,6 +76,48 @@ aws.iam.RolePolicy(
     ),
 )
 
+zone = aws.route53.get_zone(name=zone_name, private_zone=False)
+
+aws.iam.RolePolicy(
+    "ecs-task-acme",
+    role=task_role.name,
+    policy=json.dumps(
+        {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Effect": "Allow",
+                    "Action": ["route53:ListHostedZones", "route53:ListHostedZonesByName"],
+                    "Resource": "*",
+                },
+                {
+                    "Effect": "Allow",
+                    "Action": "route53:GetChange",
+                    "Resource": "arn:aws:route53:::change/*",
+                },
+                {
+                    "Effect": "Allow",
+                    "Action": "route53:ListResourceRecordSets",
+                    "Resource": f"arn:aws:route53:::hostedzone/{zone.zone_id}",
+                },
+                {
+                    "Effect": "Allow",
+                    "Action": "route53:ChangeResourceRecordSets",
+                    "Resource": f"arn:aws:route53:::hostedzone/{zone.zone_id}",
+                    "Condition": {
+                        "ForAllValues:StringEquals": {
+                            "route53:ChangeResourceRecordSetsNormalizedRecordNames": [
+                                f"_acme-challenge.{domain}"
+                            ],
+                            "route53:ChangeResourceRecordSetsRecordTypes": ["TXT"],
+                        }
+                    },
+                },
+            ],
+        }
+    ),
+)
+
 
 task_definition = aws.ecs.TaskDefinition(
     "task",
@@ -87,10 +129,8 @@ task_definition = aws.ecs.TaskDefinition(
     runtime_platform={"cpu_architecture": "ARM64", "operating_system_family": "LINUX"},
     volumes=[
         {"name": "netbird-data", "host_path": f"{NB_DIR}/data"},
-        {"name": "letsencrypt", "host_path": f"{NB_DIR}/letsencrypt"},
         {"name": "netbird-config", "host_path": f"{NB_DIR}/config.yaml"},
         {"name": "litestream-config", "host_path": f"{NB_DIR}/litestream.yml"},
-        {"name": "traefik-dynamic", "host_path": f"{NB_DIR}/traefik-dynamic.yml"},
     ],
     container_definitions=json.dumps(containers),
     tags={**tags, "Name": NAME},
@@ -129,13 +169,9 @@ standby = aws.ec2.Instance(
         "delete_on_termination": True,
     },
     tags={**tags, "Name": STANDBY_NAME},
-    opts=pulumi.ResourceOptions(
-        depends_on=[netbird_config, traefik_config, backup_access, service]
-    ),
+    opts=pulumi.ResourceOptions(depends_on=[netbird_config, backup_access, service]),
 )
 
-
-zone = aws.route53.get_zone(name=zone_name, private_zone=False)
 
 aws.route53.Record(
     "a",

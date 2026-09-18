@@ -16,7 +16,7 @@ from .settings import (
     region,
     tags,
 )
-from .storage import backup_access, instance_profile, netbird_config, traefik_config
+from .storage import backup_access, instance_profile, netbird_config
 
 ami = aws.ssm.get_parameter(name=AMI_PARAMETER).value
 
@@ -72,7 +72,7 @@ launch_template = aws.ec2.LaunchTemplate(
     ],
     user_data=base64.b64encode(user_data.encode()).decode(),
     update_default_version=True,
-    opts=pulumi.ResourceOptions(depends_on=[netbird_config, traefik_config, backup_access]),
+    opts=pulumi.ResourceOptions(depends_on=[netbird_config, backup_access]),
     tag_specifications=[
         {"resource_type": "instance", "tags": {**tags, "Name": NAME}},
         {"resource_type": "volume", "tags": {**tags, "Name": NAME}},
