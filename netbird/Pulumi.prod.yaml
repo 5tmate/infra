@@ -1,3 +1,4 @@
 config:
   aws:region: ap-northeast-1
   5tmate-netbird:zone_name: 5tmate.threatreveal.org
+encryptionsalt: v1:aLJ7Ttf77QM=:v1:1oaU/3ttVIp0zm/z:IsmyNhbr3Blf/c6Pa4tz4DjG01mzYg==
