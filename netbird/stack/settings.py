@@ -29,6 +29,7 @@ if desired_capacity is None:
     desired_capacity = 1
 
 domain = f"{hostname}.{zone_name}"
+admin_domain = f"netbird-admin.{zone_name}"
 
 
 region = aws.get_region().name

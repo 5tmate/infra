@@ -25,8 +25,8 @@ server:
     signKeyRefreshEnabled: true
     sessionCookieEncryptionKey: "__SESSION_KEY__"
     dashboardRedirectURIs:
-      - "https://__DOMAIN__/nb-auth"
-      - "https://__DOMAIN__/nb-silent-auth"
+      - "https://__ADMIN_DOMAIN__/nb-auth"
+      - "https://__ADMIN_DOMAIN__/nb-silent-auth"
     cliRedirectURIs:
       - "http://localhost:53000/"
 

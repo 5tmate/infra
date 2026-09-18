@@ -18,6 +18,7 @@ containers = [
         "image": "netbirdio/dashboard:latest",
         "essential": True,
         "memoryReservation": 128,
+        "portMappings": [{"containerPort": 80, "hostPort": 80, "protocol": "tcp"}],
         "environment": [
             {"name": "NETBIRD_MGMT_API_ENDPOINT", "value": f"https://{domain}"},
             {

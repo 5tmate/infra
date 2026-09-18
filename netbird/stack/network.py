@@ -72,11 +72,22 @@ aws.ec2.RouteTableAssociation(
 )
 
 
+cloudfront_origins = aws.ec2.get_managed_prefix_list(
+    name="com.amazonaws.global.cloudfront.origin-facing"
+)
+
 sg = aws.ec2.SecurityGroup(
     "control-plane",
     vpc_id=vpc.id,
     description="netbird self-hosted control plane",
     ingress=[
+        {
+            "description": "dashboard, only from cloudfront",
+            "protocol": "tcp",
+            "from_port": 80,
+            "to_port": 80,
+            "prefix_list_ids": [cloudfront_origins.id],
+        },
         {
             "description": "management gRPC, API, embedded IdP and relay",
             "protocol": "tcp",
