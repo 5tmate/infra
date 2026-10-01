@@ -1,0 +1,105 @@
+def container_definitions(
+    *,
+    log_group,
+    region,
+    management_url,
+    idp_url,
+    config_s3_uri,
+    config_sha256,
+    litestream_image,
+    dashboard_image,
+    server_image,
+    aws_cli_image,
+):
+    def logs(stream):
+        return {
+            "logDriver": "awslogs",
+            "options": {
+                "awslogs-group": log_group,
+                "awslogs-region": region,
+                "awslogs-stream-prefix": stream,
+            },
+        }
+
+    return [
+        {
+            "name": "dashboard",
+            "image": dashboard_image,
+            "essential": True,
+            "memoryReservation": 128,
+            "portMappings": [{"containerPort": 80, "hostPort": 80, "protocol": "tcp"}],
+            "environment": [
+                {"name": "NETBIRD_MGMT_API_ENDPOINT", "value": management_url},
+                {"name": "NETBIRD_MGMT_GRPC_API_ENDPOINT", "value": management_url},
+                {"name": "AUTH_AUDIENCE", "value": "netbird-dashboard"},
+                {"name": "AUTH_CLIENT_ID", "value": "netbird-dashboard"},
+                {"name": "AUTH_CLIENT_SECRET", "value": ""},
+                {"name": "AUTH_AUTHORITY", "value": idp_url},
+                {"name": "USE_AUTH0", "value": "false"},
+                {
+                    "name": "AUTH_SUPPORTED_SCOPES",
+                    "value": "openid profile email groups",
+                },
+                {"name": "AUTH_REDIRECT_URI", "value": "/nb-auth"},
+                {"name": "AUTH_SILENT_REDIRECT_URI", "value": "/nb-silent-auth"},
+                {"name": "NGINX_SSL_PORT", "value": "443"},
+                {"name": "LETSENCRYPT_DOMAIN", "value": "none"},
+            ],
+            "logConfiguration": logs("dashboard"),
+        },
+        {
+            "name": "litestream",
+            "image": litestream_image,
+            "essential": True,
+            "memoryReservation": 128,
+            "command": ["replicate", "-config", "/etc/litestream.yml"],
+            "stopTimeout": 60,
+            "mountPoints": [
+                {"sourceVolume": "netbird-data", "containerPath": "/var/lib/netbird"},
+                {
+                    "sourceVolume": "litestream-config",
+                    "containerPath": "/etc/litestream.yml",
+                    "readOnly": True,
+                },
+            ],
+            "logConfiguration": logs("litestream"),
+        },
+        {
+            "name": "config",
+            "image": aws_cli_image,
+            "essential": False,
+            "memoryReservation": 64,
+            "command": ["s3", "cp", config_s3_uri, "/etc/netbird/config.yaml"],
+            "environment": [
+                {"name": "AWS_REGION", "value": region},
+                {"name": "CONFIG_SHA256", "value": config_sha256},
+            ],
+            "mountPoints": [{"sourceVolume": "netbird-config", "containerPath": "/etc/netbird"}],
+            "logConfiguration": logs("config"),
+        },
+        {
+            "name": "netbird-server",
+            "image": server_image,
+            "essential": True,
+            "memoryReservation": 768,
+            "command": ["--config", "/etc/netbird/config.yaml"],
+            "environment": [{"name": "AWS_REGION", "value": region}],
+            "dependsOn": [
+                {"containerName": "litestream", "condition": "START"},
+                {"containerName": "config", "condition": "SUCCESS"},
+            ],
+            "portMappings": [
+                {"containerPort": 443, "hostPort": 443, "protocol": "tcp"},
+                {"containerPort": 3478, "hostPort": 3478, "protocol": "udp"},
+            ],
+            "mountPoints": [
+                {"sourceVolume": "netbird-data", "containerPath": "/var/lib/netbird"},
+                {
+                    "sourceVolume": "netbird-config",
+                    "containerPath": "/etc/netbird",
+                    "readOnly": True,
+                },
+            ],
+            "logConfiguration": logs("server"),
+        },
+    ]
