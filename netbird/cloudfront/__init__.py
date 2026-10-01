@@ -126,6 +126,7 @@ class Cdn(pulumi.ComponentResource):
                         "https_port": origin_port,
                         "origin_protocol_policy": origin_protocol_policy,
                         "origin_ssl_protocols": list(origin_ssl_protocols),
+                        "origin_read_timeout": 60,
                     },
                 }
             ],
