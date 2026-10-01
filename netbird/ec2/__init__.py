@@ -151,7 +151,7 @@ class SpotHost(pulumi.ComponentResource):
                 "managed_scaling": {"status": "DISABLED"},
             },
             tags=tags,
-            opts=child,
+            opts=pulumi.ResourceOptions(parent=self, delete_before_replace=True),
         )
         aws.ecs.ClusterCapacityProviders(
             "cluster-capacity",
