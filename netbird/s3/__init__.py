@@ -1,4 +1,5 @@
 import hashlib
+import json
 from pathlib import Path
 
 import pulumi
@@ -68,6 +69,7 @@ class NetBirdConfig(pulumi.ComponentResource):
         exposed_address: str,
         stun_uri: str,
         issuer: str,
+        trusted_peers: list[str],
         auth_secret: pulumi.Input[str],
         session_key: pulumi.Input[str],
         store_encryption_key: pulumi.Input[str],
@@ -93,6 +95,7 @@ class NetBirdConfig(pulumi.ComponentResource):
                     "__EXPOSED_ADDRESS__": exposed_address,
                     "__STUN_URI__": stun_uri,
                     "__ISSUER__": issuer,
+                    "__TRUSTED_PEERS__": json.dumps(trusted_peers),
                     "__AUTH_SECRET__": v[0],
                     "__SESSION_KEY__": v[1],
                     "__ENCRYPTION_KEY__": v[2],

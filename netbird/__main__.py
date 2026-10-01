@@ -19,6 +19,7 @@ SERVER_IMAGE = "netbirdio/netbird-server:0.79.0-rc.1"
 STUN_IMAGE = "netbirdio/relay:0.79.0-rc.1"
 AWS_CLI_IMAGE = "public.ecr.aws/aws-cli/aws-cli:2.37.1"
 AMI_PARAMETER = "/aws/service/ecs/optimized-ami/amazon-linux-2023/arm64/recommended/image_id"
+PEER_IP_METHODS = ["Login", "Sync", "SyncMeta"]  # NetBird 只在這幾個 gRPC 讀 peer 的 IP
 
 config = pulumi.Config()
 zone_name = config.require("zone_name")  # Route53 zone
@@ -85,6 +86,7 @@ server_config = NetBirdConfig(
     exposed_address=exposed_address,
     stun_uri=stun_uri,
     issuer=idp_url,
+    trusted_peers=sorted(entry.cidr for entry in cloudfront_origins.entries),
     auth_secret=config.require_secret("auth_secret"),
     session_key=config.require_secret("session_key"),
     store_encryption_key=config.require_secret("store_encryption_key"),
@@ -241,6 +243,7 @@ dashboard = Cdn(
     origin_request_policy="Managed-AllViewer",
     response_headers_policy=None,
     grpc_enabled=False,
+    forwarded_for_paths=[],
 )
 
 management = Cdn(
@@ -257,6 +260,7 @@ management = Cdn(
     origin_request_policy="Managed-AllViewerExceptHostHeader",
     response_headers_policy="Managed-CORS-With-Preflight",
     grpc_enabled=True,
+    forwarded_for_paths=[f"/management.ManagementService/{m}" for m in PEER_IP_METHODS],
 )
 
 

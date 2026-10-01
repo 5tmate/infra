@@ -22,6 +22,9 @@ server:
   dataDir: "/var/lib/netbird"
   disableGeoliteUpdate: true
 
+  reverseProxy:
+    trustedPeers: __TRUSTED_PEERS__
+
   auth:
     issuer: "__ISSUER__"
     signKeyRefreshEnabled: true

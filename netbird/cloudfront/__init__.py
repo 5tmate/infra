@@ -32,6 +32,13 @@ ACCESS_LOG_FIELDS = [
 READ_METHODS = ["GET", "HEAD", "OPTIONS"]
 ALL_METHODS = ["GET", "HEAD", "OPTIONS", "PUT", "POST", "PATCH", "DELETE"]
 
+OVERWRITE_FORWARDED_FOR = """function handler(event) {
+    var request = event.request;
+    request.headers['x-forwarded-for'] = { value: event.viewer.ip };
+    return request;
+}
+"""
+
 
 def _create_access_logs(
     name: str,
@@ -90,6 +97,7 @@ class Cdn(pulumi.ComponentResource):
         origin_request_policy: str,
         response_headers_policy: str | None,
         grpc_enabled: bool,
+        forwarded_for_paths: Sequence[str],
         opts: pulumi.ResourceOptions | None = None,
     ):
         super().__init__("netbird:cloudfront:Cdn", name, None, opts)
@@ -112,6 +120,27 @@ class Cdn(pulumi.ComponentResource):
                 name=response_headers_policy
             ).id
 
+        ordered_behaviors = []
+        if forwarded_for_paths:
+            forwarded_for = aws.cloudfront.Function(
+                f"{name}-forwarded-for",
+                name=f"{resource_name}-forwarded-for",
+                runtime="cloudfront-js-2.0",
+                code=OVERWRITE_FORWARDED_FOR,
+                publish=True,
+                opts=pulumi.ResourceOptions(parent=self),
+            )
+            ordered_behaviors = [
+                {
+                    **behavior,
+                    "path_pattern": path,
+                    "function_associations": [
+                        {"event_type": "viewer-request", "function_arn": forwarded_for.arn}
+                    ],
+                }
+                for path in forwarded_for_paths
+            ]
+
         self.distribution = aws.cloudfront.Distribution(
             f"{name}-distribution",
             enabled=True,
@@ -131,6 +160,7 @@ class Cdn(pulumi.ComponentResource):
                 }
             ],
             default_cache_behavior=behavior,
+            ordered_cache_behaviors=ordered_behaviors,
             restrictions={"geo_restriction": {"restriction_type": "none"}},
             viewer_certificate={
                 "acm_certificate_arn": certificate_arn,
