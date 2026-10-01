@@ -14,7 +14,7 @@ server:
       enabled: true
       dataDir: "/var/lib/netbird/letsencrypt"
       domains:
-        - "__MANAGEMENT_DOMAIN__"
+        - "__ORIGIN_DOMAIN__"
       email: "__ACME_EMAIL__"
       awsRoute53: true
 

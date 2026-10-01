@@ -26,6 +26,7 @@ hostname = config.get("hostname", "netbird")  # 管理網域主機名
 management_domain = f"{hostname}.{zone_name}"  # 指 443 的 CloudFront
 dashboard_domain = f"admin-{hostname}.{zone_name}"  # 指 80 的 CloudFront
 stun_domain = f"stun-{hostname}.{zone_name}"  # 指 EIP，只給 STUN
+origin_domain = f"origin-{hostname}.{zone_name}"  # 指 EIP，CloudFront 回源用，Let's Encrypt 簽這個
 desired_capacity = config.get_int("desired_capacity", 1)  # 主機數
 default_tags = pulumi.Config("aws").require_object("defaultTags")
 
@@ -79,7 +80,7 @@ server_config = NetBirdConfig(
     "config",
     bucket=backup.bucket.id,
     key="config/config.yaml",
-    management_domain=management_domain,
+    origin_domain=origin_domain,
     dashboard_domain=dashboard_domain,
     exposed_address=exposed_address,
     stun_uri=stun_uri,
@@ -196,7 +197,7 @@ netbird = NetBirdService(
     log_group=ecs_logs.name,
     state_bucket_arn=backup.arn,
     zone_id=zone.zone_id,
-    certificate_domains=[management_domain],
+    certificate_domains=[origin_domain],
     region=region,
     nb_dir=NB_DIR,
     management_url=management_url,
@@ -232,11 +233,12 @@ dashboard = Cdn(
     us_east_1_provider=us_east_1,
     certificate_arn=wildcard_certificate.arn,
     alias=dashboard_domain,
-    origin_domain=eip.public_dns,
+    origin_domain=origin_domain,
     origin_protocol_policy="http-only",
     origin_port=80,
     origin_ssl_protocols=["TLSv1.2"],
     allowed_methods=READ_METHODS,
+    origin_request_policy="Managed-AllViewer",
     response_headers_policy=None,
     grpc_enabled=False,
 )
@@ -247,11 +249,12 @@ management = Cdn(
     us_east_1_provider=us_east_1,
     certificate_arn=wildcard_certificate.arn,
     alias=management_domain,
-    origin_domain=eip.public_dns,
+    origin_domain=origin_domain,
     origin_protocol_policy="https-only",
     origin_port=443,
     origin_ssl_protocols=["SSLv3", "TLSv1", "TLSv1.1", "TLSv1.2"],
     allowed_methods=ALL_METHODS,
+    origin_request_policy="Managed-AllViewerExceptHostHeader",
     response_headers_policy="Managed-CORS-With-Preflight",
     grpc_enabled=True,
 )
@@ -275,6 +278,15 @@ aws.route53.Record(
     "stun-record",
     zone_id=zone.zone_id,
     name=stun_domain,
+    type="A",
+    ttl=60,
+    records=[eip.public_ip],
+)
+
+aws.route53.Record(
+    "origin-record",
+    zone_id=zone.zone_id,
+    name=origin_domain,
     type="A",
     ttl=60,
     records=[eip.public_ip],

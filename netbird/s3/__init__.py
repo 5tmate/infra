@@ -63,7 +63,7 @@ class NetBirdConfig(pulumi.ComponentResource):
         *,
         bucket: pulumi.Input[str],
         key: str,
-        management_domain: str,
+        origin_domain: str,
         dashboard_domain: str,
         exposed_address: str,
         stun_uri: str,
@@ -88,7 +88,7 @@ class NetBirdConfig(pulumi.ComponentResource):
         ).apply(
             lambda v: _render(
                 {
-                    "__MANAGEMENT_DOMAIN__": management_domain,
+                    "__ORIGIN_DOMAIN__": origin_domain,
                     "__DASHBOARD_DOMAIN__": dashboard_domain,
                     "__EXPOSED_ADDRESS__": exposed_address,
                     "__STUN_URI__": stun_uri,

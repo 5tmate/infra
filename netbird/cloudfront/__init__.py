@@ -87,6 +87,7 @@ class Cdn(pulumi.ComponentResource):
         origin_port: int,
         origin_ssl_protocols: Sequence[str],
         allowed_methods: Sequence[str],
+        origin_request_policy: str,
         response_headers_policy: str | None,
         grpc_enabled: bool,
         opts: pulumi.ResourceOptions | None = None,
@@ -94,7 +95,7 @@ class Cdn(pulumi.ComponentResource):
         super().__init__("netbird:cloudfront:Cdn", name, None, opts)
 
         caching_disabled = aws.cloudfront.get_cache_policy(name="Managed-CachingDisabled")
-        forward_all = aws.cloudfront.get_origin_request_policy(name="Managed-AllViewer")
+        origin_policy = aws.cloudfront.get_origin_request_policy(name=origin_request_policy)
 
         behavior = {
             "target_origin_id": name,
@@ -102,7 +103,7 @@ class Cdn(pulumi.ComponentResource):
             "allowed_methods": list(allowed_methods),
             "cached_methods": ["GET", "HEAD"],
             "cache_policy_id": caching_disabled.id,
-            "origin_request_policy_id": forward_all.id,
+            "origin_request_policy_id": origin_policy.id,
         }
         if grpc_enabled:
             behavior["grpc_config"] = {"enabled": True}
