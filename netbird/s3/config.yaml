@@ -1,0 +1,38 @@
+server:
+  listenAddress: ":443"
+  exposedAddress: "__EXPOSED_ADDRESS__"
+  stunPorts:
+    - 3478
+  metricsPort: 9090
+  healthcheckAddress: "127.0.0.1:9000"
+  logLevel: "info"
+  logFile: "console"
+
+  tls:
+    letsencrypt:
+      enabled: __LETSENCRYPT_ENABLED__
+      dataDir: "/var/lib/netbird/letsencrypt"
+      domains:
+        - "__MANAGEMENT_DOMAIN__"
+      email: "__ACME_EMAIL__"
+      awsRoute53: __LETSENCRYPT_ENABLED__
+
+  authSecret: "__AUTH_SECRET__"
+  dataDir: "/var/lib/netbird"
+
+  auth:
+    issuer: "__ISSUER__"
+    signKeyRefreshEnabled: true
+    sessionCookieEncryptionKey: "__SESSION_KEY__"
+    dashboardRedirectURIs:
+      - "https://__DASHBOARD_DOMAIN__/nb-auth"
+      - "https://__DASHBOARD_DOMAIN__/nb-silent-auth"
+    cliRedirectURIs:
+      - "http://localhost:53000/"
+    owner:
+      email: "__OWNER_EMAIL__"
+      password: "__OWNER_HASH__"
+
+  store:
+    engine: sqlite
+    encryptionKey: "__ENCRYPTION_KEY__"
