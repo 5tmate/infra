@@ -39,6 +39,9 @@ install -d "${NB_DIR}/data/letsencrypt"
 retry aws s3 sync "s3://${BUCKET}/config/letsencrypt/" "${NB_DIR}/data/letsencrypt/" --region "$REGION" --only-show-errors
 chmod -R go-rwx "${NB_DIR}/data/letsencrypt"
 
+retry aws s3 sync "s3://${BUCKET}/config/geolite/" "${NB_DIR}/data/" --region "$REGION" --only-show-errors \
+  --exclude "*" --include "GeoLite2-City_*.mmdb" --include "geonames_*.db"
+
 cat > "${NB_DIR}/litestream.yml" <<YML
 dbs:
   - path: /var/lib/netbird/store.db
@@ -102,6 +105,62 @@ Persistent=true
 WantedBy=timers.target
 UNIT
 
+cat > /usr/local/bin/netbird-update-geolite <<GEO
+#!/bin/bash
+set -euo pipefail
+BUCKET=${BUCKET}
+REGION=${REGION}
+NB_DIR=${NB_DIR}
+GEO
+
+cat >> /usr/local/bin/netbird-update-geolite <<'GEO'
+URL="https://pkgs.netbird.io/geolocation-dbs/GeoLite2-City/download?suffix=tar.gz"
+DEST="s3://${BUCKET}/config/geolite"
+TMP=$(mktemp -d)
+trap 'rm -rf "$TMP"' EXIT
+
+aws s3 sync "${NB_DIR}/data/" "$DEST/" --region "$REGION" --only-show-errors --exclude "*" --include "geonames_*.db"
+
+curl -fsSL --retry 3 -o "$TMP/db.tar.gz" "$URL"
+curl -fsSL --retry 3 -o "$TMP/db.sha256" "${URL}.sha256"
+echo "$(cut -d' ' -f1 "$TMP/db.sha256")  $TMP/db.tar.gz" | sha256sum -c --quiet
+tar -xzf "$TMP/db.tar.gz" -C "$TMP"
+SRC=$(find "$TMP" -name GeoLite2-City.mmdb | head -1)
+NAME="$(basename "$(dirname "$SRC")").mmdb"
+case "$NAME" in GeoLite2-City_*.mmdb) ;; *) echo "unexpected archive layout: $SRC" >&2; exit 1 ;; esac
+
+[ -e "${NB_DIR}/data/${NAME}" ] || install -m 0644 "$SRC" "${NB_DIR}/data/${NAME}"
+aws s3 cp "${NB_DIR}/data/${NAME}" "$DEST/${NAME}" --region "$REGION" --only-show-errors
+for old in $(aws s3 ls "$DEST/" --region "$REGION" | awk '{print $4}'); do
+  case "$old" in GeoLite2-City_*.mmdb) [ "$old" = "$NAME" ] || aws s3 rm "$DEST/$old" --region "$REGION" --only-show-errors ;; esac
+done
+GEO
+chmod +x /usr/local/bin/netbird-update-geolite
+
+cat > /etc/systemd/system/netbird-update-geolite.service <<'UNIT'
+[Unit]
+Description=Fetch the newest GeoLite2 City database into the data directory and S3, keeping the old one if anything fails
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/netbird-update-geolite
+UNIT
+
+cat > /etc/systemd/system/netbird-update-geolite.timer <<'UNIT'
+[Unit]
+Description=Monthly GeoLite2 update
+
+[Timer]
+OnCalendar=monthly
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+UNIT
+
 cat > /etc/systemd/system/netbird-prepare.service <<'UNIT'
 [Unit]
 Description=Restore NetBird state from S3 before the ECS agent joins the cluster
@@ -132,8 +191,11 @@ grep -q "^ECS_CLUSTER=" /etc/ecs/ecs.config 2>/dev/null || echo "ECS_CLUSTER=${C
 systemctl daemon-reload
 systemctl enable netbird-prepare.service
 systemctl enable --now netbird-backup-certs.timer
+systemctl enable --now netbird-update-geolite.timer
 systemctl start netbird-prepare.service
 
 if [ "$ROLE" = "standby" ]; then
+  systemctl mask --runtime ecs.service
+  systemctl stop ecs.service
   shutdown -h +1
 fi

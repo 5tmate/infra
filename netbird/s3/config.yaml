@@ -20,6 +20,7 @@ server:
 
   authSecret: "__AUTH_SECRET__"
   dataDir: "/var/lib/netbird"
+  disableGeoliteUpdate: true
 
   auth:
     issuer: "__ISSUER__"
