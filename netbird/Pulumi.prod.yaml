@@ -9,8 +9,6 @@ config:
     tags:
       App: 5tmate
       ManagedBy: pulumi
-  5tmate-netbird:origin_tls: "false"
-  5tmate-netbird:peers_via_cloudfront: "true"
   5tmate-netbird:owner_password_hash:
     secure: v1:aAldY6YeN6maIYG+:HrERboA1mdHncXFI8xRvKiD0UGjPrskluKyY6n23JJ/LzBg5PWUrWFBttFQewIO6wCkd38w3GlYeWgE/hrCswRWfObZ3Mg7dyWRMsw==
   5tmate-netbird:auth_secret:

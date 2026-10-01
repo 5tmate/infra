@@ -1,8 +1,9 @@
 server:
   listenAddress: ":443"
   exposedAddress: "__EXPOSED_ADDRESS__"
-  stunPorts:
-    - 3478
+  stuns:
+    - uri: "__STUN_URI__"
+      proto: "udp"
   metricsPort: 9090
   healthcheckAddress: "127.0.0.1:9000"
   logLevel: "info"
@@ -10,12 +11,12 @@ server:
 
   tls:
     letsencrypt:
-      enabled: __LETSENCRYPT_ENABLED__
+      enabled: true
       dataDir: "/var/lib/netbird/letsencrypt"
       domains:
         - "__MANAGEMENT_DOMAIN__"
       email: "__ACME_EMAIL__"
-      awsRoute53: __LETSENCRYPT_ENABLED__
+      awsRoute53: true
 
   authSecret: "__AUTH_SECRET__"
   dataDir: "/var/lib/netbird"

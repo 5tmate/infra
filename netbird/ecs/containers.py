@@ -9,6 +9,7 @@ def container_definitions(
     litestream_image,
     dashboard_image,
     server_image,
+    stun_image,
     aws_cli_image,
 ):
     def logs(stream):
@@ -88,10 +89,7 @@ def container_definitions(
                 {"containerName": "litestream", "condition": "START"},
                 {"containerName": "config", "condition": "SUCCESS"},
             ],
-            "portMappings": [
-                {"containerPort": 443, "hostPort": 443, "protocol": "tcp"},
-                {"containerPort": 3478, "hostPort": 3478, "protocol": "udp"},
-            ],
+            "portMappings": [{"containerPort": 443, "hostPort": 443, "protocol": "tcp"}],
             "mountPoints": [
                 {"sourceVolume": "netbird-data", "containerPath": "/var/lib/netbird"},
                 {
@@ -101,5 +99,20 @@ def container_definitions(
                 },
             ],
             "logConfiguration": logs("server"),
+        },
+        {
+            "name": "stun",
+            "image": stun_image,
+            "essential": False,
+            "memoryReservation": 64,
+            "environment": [
+                {"name": "NB_ENABLE_STUN", "value": "true"},
+                {"name": "NB_STUN_PORTS", "value": "3478"},
+                {"name": "NB_LISTEN_ADDRESS", "value": "127.0.0.1:33080"},
+                {"name": "NB_EXPOSED_ADDRESS", "value": "rel://127.0.0.1:33080"},
+                {"name": "NB_AUTH_SECRET", "value": "stun-only"},
+            ],
+            "portMappings": [{"containerPort": 3478, "hostPort": 3478, "protocol": "udp"}],
+            "logConfiguration": logs("stun"),
         },
     ]

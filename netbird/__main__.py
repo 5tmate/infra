@@ -16,25 +16,22 @@ INSTANCE_TYPES = ["t4g.small", "t4g.medium", "m6g.medium"]
 LITESTREAM_IMAGE = "litestream/litestream:0.5.17"
 DASHBOARD_IMAGE = "netbirdio/dashboard:v2.93.0"
 SERVER_IMAGE = "netbirdio/netbird-server:0.79.0-rc.1"
+STUN_IMAGE = "netbirdio/relay:0.79.0-rc.1"
 AWS_CLI_IMAGE = "public.ecr.aws/aws-cli/aws-cli:2.37.1"
 AMI_PARAMETER = "/aws/service/ecs/optimized-ami/amazon-linux-2023/arm64/recommended/image_id"
 
 config = pulumi.Config()
 zone_name = config.require("zone_name")  # Route53 zone
 hostname = config.get("hostname", "netbird")  # 管理網域主機名
-management_domain = f"{hostname}.{zone_name}"  # 直連指 EIP，否則指 443 的 CloudFront
+management_domain = f"{hostname}.{zone_name}"  # 指 443 的 CloudFront
 dashboard_domain = f"admin-{hostname}.{zone_name}"  # 指 80 的 CloudFront
-relay_domain = f"relay-{hostname}.{zone_name}"  # 一律指 EIP，STUN、relay、signal 共用
+stun_domain = f"stun-{hostname}.{zone_name}"  # 指 EIP，只給 STUN
 desired_capacity = config.get_int("desired_capacity", 1)  # 主機數
-origin_tls = config.get_bool("origin_tls", True)  # 443 是 TLS 還是明文
-peers_via_cloudfront = config.get_bool("peers_via_cloudfront", False)  # API 跟登入走 CloudFront
 default_tags = pulumi.Config("aws").require_object("defaultTags")
 
-if not (origin_tls or peers_via_cloudfront):
-    raise ValueError("origin_tls=false requires peers_via_cloudfront=true")
-
 management_url = f"https://{management_domain}"  # peer、dashboard、登入都連這裡
-relay_url = f"{'https' if origin_tls else 'http'}://{relay_domain}:443"  # server 對外宣告的位址
+exposed_address = f"{management_url}:443"  # signal、relay 跟著走 CloudFront
+stun_uri = f"stun:{stun_domain}:3478"  # peer 直連的 STUN
 idp_url = f"{management_url}/oauth2"  # 登入的 Dex
 health_url = f"{idp_url}/.well-known/openid-configuration"  # Lambda 探活
 
@@ -83,11 +80,10 @@ server_config = NetBirdConfig(
     bucket=backup.bucket.id,
     key="config/config.yaml",
     management_domain=management_domain,
-    relay_domain=relay_domain,
     dashboard_domain=dashboard_domain,
-    exposed_address=relay_url,
+    exposed_address=exposed_address,
+    stun_uri=stun_uri,
     issuer=idp_url,
-    letsencrypt_enabled=origin_tls,
     auth_secret=config.require_secret("auth_secret"),
     session_key=config.require_secret("session_key"),
     store_encryption_key=config.require_secret("store_encryption_key"),
@@ -132,14 +128,14 @@ sg = aws.ec2.SecurityGroup(
     description="netbird self-hosted control plane",
     ingress=[
         {
-            "description": "management gRPC, API, embedded IdP, signal and relay",
+            "description": "management, signal, relay and login, only from cloudfront",
             "protocol": "tcp",
             "from_port": 443,
             "to_port": 443,
-            **anyone,
+            **only_cloudfront,
         },
         {
-            "description": "embedded STUN",
+            "description": "STUN",
             "protocol": "udp",
             "from_port": 3478,
             "to_port": 3478,
@@ -200,7 +196,7 @@ netbird = NetBirdService(
     log_group=ecs_logs.name,
     state_bucket_arn=backup.arn,
     zone_id=zone.zone_id,
-    certificate_domains=[management_domain, relay_domain],
+    certificate_domains=[management_domain],
     region=region,
     nb_dir=NB_DIR,
     management_url=management_url,
@@ -210,6 +206,7 @@ netbird = NetBirdService(
     litestream_image=LITESTREAM_IMAGE,
     dashboard_image=DASHBOARD_IMAGE,
     server_image=SERVER_IMAGE,
+    stun_image=STUN_IMAGE,
     aws_cli_image=AWS_CLI_IMAGE,
     start_after=[failover.task_events_target, failover.task_events_invoke],
 )
@@ -251,12 +248,12 @@ management = Cdn(
     certificate_arn=wildcard_certificate.arn,
     alias=management_domain,
     origin_domain=eip.public_dns,
-    origin_protocol_policy="https-only" if origin_tls else "http-only",
+    origin_protocol_policy="https-only",
     origin_port=443,
     origin_ssl_protocols=["SSLv3", "TLSv1", "TLSv1.1", "TLSv1.2"],
     allowed_methods=ALL_METHODS,
     response_headers_policy="Managed-CORS-With-Preflight",
-    grpc_enabled=origin_tls,
+    grpc_enabled=True,
 )
 
 
@@ -275,9 +272,9 @@ aws.route53.Record(
 )
 
 aws.route53.Record(
-    "relay-record",
+    "stun-record",
     zone_id=zone.zone_id,
-    name=relay_domain,
+    name=stun_domain,
     type="A",
     ttl=60,
     records=[eip.public_ip],
@@ -288,9 +285,7 @@ aws.route53.Record(
     zone_id=zone.zone_id,
     name=management_domain,
     type="A",
-    ttl=None if peers_via_cloudfront else 60,
-    records=None if peers_via_cloudfront else [eip.public_ip],
-    aliases=cloudfront_alias(management) if peers_via_cloudfront else None,
+    aliases=cloudfront_alias(management),
 )
 
 pulumi.export("asg_name", host.asg_name)
