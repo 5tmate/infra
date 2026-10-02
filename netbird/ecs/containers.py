@@ -173,6 +173,22 @@ def container_definitions(
                 {"name": "NB_AUTH_SECRET", "value": "stun-only"},
             ],
             "portMappings": [{"containerPort": 3478, "hostPort": 3478, "protocol": "udp"}],
+            "healthCheck": {
+                "command": [
+                    "CMD",
+                    "/busybox/wget",
+                    "-q",
+                    "-T",
+                    "4",
+                    "-O",
+                    "/dev/null",
+                    "http://127.0.0.1:9000/health",
+                ],
+                "interval": 10,
+                "timeout": 5,
+                "retries": 3,
+                "startPeriod": 30,
+            },
             "logConfiguration": logs("stun"),
         },
     ]
