@@ -7,6 +7,7 @@ import pulumi_aws as aws
 import policies
 
 LAMBDA_SOURCE = Path(__file__).parent / "lambda"
+EVENT_RETRY = {"maximum_event_age_in_seconds": 900, "maximum_retry_attempts": 1}
 
 
 def _publish_policy(topic_arn: str) -> str:
@@ -270,11 +271,19 @@ class Failover(pulumi.ComponentResource):
             tags=tags,
             opts=child,
         )
+        aws.lambda_.FunctionEventInvokeConfig(
+            "failover-invoke-config",
+            function_name=self.function.name,
+            maximum_event_age_in_seconds=EVENT_RETRY["maximum_event_age_in_seconds"],
+            maximum_retry_attempts=EVENT_RETRY["maximum_retry_attempts"],
+            opts=child,
+        )
         aws.cloudwatch.EventTarget(
             "alarm-events-to-lambda",
             rule=alarm_events.name,
             target_id="failover",
             arn=self.function.arn,
+            retry_policy=EVENT_RETRY,
             opts=child,
         )
         aws.lambda_.Permission(
@@ -299,6 +308,7 @@ class Failover(pulumi.ComponentResource):
             rule=task_events.name,
             target_id="failover",
             arn=self.function.arn,
+            retry_policy=EVENT_RETRY,
             opts=child,
         )
         self.task_events_invoke = aws.lambda_.Permission(
@@ -315,6 +325,7 @@ class Failover(pulumi.ComponentResource):
             rule=scaling_events.name,
             target_id="failover",
             arn=self.function.arn,
+            retry_policy=EVENT_RETRY,
             opts=child,
         )
         aws.lambda_.Permission(
