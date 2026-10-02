@@ -140,6 +140,10 @@ def place_eip(event):
     arn = detail.get("containerInstanceArn")
     if not arn:
         return "the event carries no container instance, nothing to do"
+    if detail.get("desiredStatus") != "RUNNING":
+        return f"the task is meant to be {detail.get('desiredStatus')}, nothing to do"
+    if running_task_host() != arn:
+        return f"the service's running task is not on {arn}, nothing to do"
 
     hosts = ecs.describe_container_instances(cluster=CLUSTER, containerInstances=[arn])[
         "containerInstances"
@@ -148,6 +152,10 @@ def place_eip(event):
         return f"{arn} is no longer in the cluster, nothing to do"
 
     instance_id = hosts[0]["ec2InstanceId"]
+    reservations = ec2.describe_instances(InstanceIds=[instance_id])["Reservations"]
+    state = reservations[0]["Instances"][0]["State"]["Name"] if reservations else "gone"
+    if state != "running":
+        return f"{instance_id} is {state}, nothing to do"
     if eip_holder() == instance_id:
         return f"the elastic ip is already on {instance_id}, nothing to do"
 

@@ -112,6 +112,7 @@ def _task_events_pattern(cluster_arn: str, service_name: str) -> str:
                 "clusterArn": [cluster_arn],
                 "group": [f"service:{service_name}"],
                 "lastStatus": ["RUNNING"],
+                "desiredStatus": ["RUNNING"],
             },
         }
     )
