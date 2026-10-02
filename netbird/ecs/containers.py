@@ -203,7 +203,7 @@ def container_definitions(
             "healthCheck": health_check(
                 "bash", LITESTREAM_PROBE, interval=10, retries=3, start_period=60
             ),
-            "restartPolicy": {"enabled": True, "restartAttemptPeriod": 60},
+            "restartPolicy": {"enabled": True, "restartAttemptPeriod": 300},
             "stopTimeout": 60,
             "dependsOn": [
                 {"containerName": f"restore-{db}", "condition": "SUCCESS"} for db in DATABASES
