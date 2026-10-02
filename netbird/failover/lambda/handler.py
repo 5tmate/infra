@@ -16,9 +16,10 @@ EIP_ALLOC = os.environ["EIP_ALLOC"]
 DOMAIN = os.environ["DOMAIN"]
 HEALTH_URL = os.environ["HEALTH_URL"]
 NO_CAPACITY_ALARM = os.environ["NO_CAPACITY_ALARM"]
-CAPACITY_STABLE_ALARM = os.environ["CAPACITY_STABLE_ALARM"]
 TOPIC_ARN = os.environ["TOPIC_ARN"]
 FAILOVER_EVENT_MAX_AGE = 300
+PRIMARY_JOIN_BUDGET = 120
+FAILBACK_SOAK = 180
 
 log = logging.getLogger()
 log.setLevel(logging.INFO)
@@ -244,7 +245,45 @@ def launch_failed(event, context):
     return fail_over(context)
 
 
-def fail_back(context):
+def primary_ready(instance_id):
+    if instance_id not in in_service(group()):
+        return False
+    host = container_instances().get(instance_id)
+    return bool(host and usable(host))
+
+
+def task_on_standby():
+    instance_id, state = standby_instance()
+    if state != "running":
+        return False
+    standby = container_instances().get(instance_id)
+    return bool(standby) and running_task_host() == standby["containerInstanceArn"]
+
+
+def launch_succeeded(event, context):
+    primary_id = event.get("detail", {}).get("EC2InstanceId")
+    if not primary_id:
+        return "the launch names no instance, nothing to do"
+    if not task_on_standby():
+        return "the task is not on the standby, nothing to do"
+
+    deadline = time.time() + PRIMARY_JOIN_BUDGET
+    while not primary_ready(primary_id):
+        if time.time() > deadline:
+            return f"{primary_id} never joined the cluster, staying on the standby"
+        log.info("waiting for %s to join the cluster", primary_id)
+        time.sleep(20)
+
+    ready_since = time.time()
+    while time.time() - ready_since < FAILBACK_SOAK:
+        time.sleep(20)
+        if not primary_ready(primary_id):
+            return f"{primary_id} stopped being ready, staying on the standby"
+    log.info("%s stayed ready for %ds", primary_id, FAILBACK_SOAK)
+    return fail_back(context, primary_id)
+
+
+def fail_back(context, primary_id):
     instance_id, state = standby_instance()
     if state != "running":
         return f"standby is {state}, nothing to do"
@@ -256,10 +295,10 @@ def fail_back(context):
     if running_task_host() != standby_arn:
         return "the task is not on the standby, nothing to do"
 
-    primary = [c for i, c in hosts.items() if i != instance_id and usable(c)]
-    if not primary:
-        return "no other container instance to hand back to, staying on the standby"
-    primary_id = primary[0]["ec2InstanceId"]
+    primary = hosts.get(primary_id)
+    if not primary or not usable(primary):
+        return f"{primary_id} is not ready, staying on the standby"
+    primary_arn = primary["containerInstanceArn"]
 
     log.info("draining %s so the task moves back to %s", instance_id, primary_id)
     set_state(standby_arn, "DRAINING")
@@ -272,7 +311,6 @@ def fail_back(context):
     except Failed as e:
         log.error("handing back failed, pushing the task onto the standby again: %s", e)
         set_state(standby_arn, "ACTIVE")
-        primary_arn = primary[0]["containerInstanceArn"]
         set_state(primary_arn, "DRAINING")
         try:
             wait_task_on(context, standby_arn, budget=240)
@@ -312,6 +350,10 @@ def handler(event, context):
         log.info("the group could not launch an instance")
         return run("failover", lambda: launch_failed(event, context))
 
+    if kind == "EC2 Instance Launch Successful":
+        log.info("the group launched %s", event.get("detail", {}).get("EC2InstanceId"))
+        return run("failback", lambda: launch_succeeded(event, context))
+
     if kind != "CloudWatch Alarm State Change":
         return {"skipped": f"{kind} needs no action"}
 
@@ -321,8 +363,6 @@ def handler(event, context):
     log.info("alarm %s is %s", name, state)
     if state != "ALARM":
         return {"skipped": f"state is {state}"}
-    if name == NO_CAPACITY_ALARM:
-        return run("failover", lambda: fail_over(context))
-    if name == CAPACITY_STABLE_ALARM:
-        return run("failback", lambda: fail_back(context))
-    return {"skipped": f"unknown alarm {name}"}
+    if name != NO_CAPACITY_ALARM:
+        return {"skipped": f"unknown alarm {name}"}
+    return run("failover", lambda: fail_over(context))

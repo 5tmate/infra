@@ -175,25 +175,6 @@ class Failover(pulumi.ComponentResource):
             tags=tags,
             opts=child,
         )
-        capacity_stable = aws.cloudwatch.MetricAlarm(
-            "capacity-stable",
-            name=f"{resource_name}-capacity-stable",
-            namespace="AWS/AutoScaling",
-            metric_name="GroupInServiceInstances",
-            dimensions={"AutoScalingGroupName": asg_name},
-            statistic="Maximum",
-            period=60,
-            evaluation_periods=6,
-            datapoints_to_alarm=6,
-            threshold=1,
-            comparison_operator="GreaterThanOrEqualToThreshold",
-            treat_missing_data="notBreaching",
-            alarm_description=(
-                "the group has had a running instance for 6 minutes, fail back to the primary"
-            ),
-            tags=tags,
-            opts=child,
-        )
 
         self.event_log = aws.cloudwatch.LogGroup(
             "event-log",
@@ -228,10 +209,8 @@ class Failover(pulumi.ComponentResource):
         alarm_events = aws.cloudwatch.EventRule(
             "alarm-events",
             name=f"{resource_name}-alarm-events",
-            description="either failover alarm entering ALARM",
-            event_pattern=pulumi.Output.all(no_capacity.name, capacity_stable.name).apply(
-                lambda names: _alarm_events_pattern(list(names))
-            ),
+            description="the no-capacity alarm entering ALARM",
+            event_pattern=no_capacity.name.apply(lambda name: _alarm_events_pattern([name])),
             tags=tags,
             opts=child,
         )
@@ -272,7 +251,7 @@ class Failover(pulumi.ComponentResource):
             runtime="python3.12",
             handler="handler.handler",
             code=pulumi.FileArchive(str(LAMBDA_SOURCE)),
-            timeout=870,
+            timeout=900,
             memory_size=256,
             reserved_concurrent_executions=1,
             environment={
@@ -285,7 +264,6 @@ class Failover(pulumi.ComponentResource):
                     "DOMAIN": management_domain,
                     "HEALTH_URL": health_url,
                     "NO_CAPACITY_ALARM": f"{resource_name}-no-capacity",
-                    "CAPACITY_STABLE_ALARM": f"{resource_name}-capacity-stable",
                     "TOPIC_ARN": self.alerts.arn,
                 }
             },
