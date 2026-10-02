@@ -1,3 +1,6 @@
+DATABASES = ["store", "idp", "events"]
+
+
 def container_definitions(
     *,
     log_group,
@@ -21,6 +24,15 @@ def container_definitions(
                 "awslogs-stream-prefix": stream,
             },
         }
+
+    litestream_mounts = [
+        {"sourceVolume": "netbird-data", "containerPath": "/var/lib/netbird"},
+        {
+            "sourceVolume": "litestream-config",
+            "containerPath": "/etc/litestream.yml",
+            "readOnly": True,
+        },
+    ]
 
     return [
         {
@@ -48,6 +60,27 @@ def container_definitions(
             ],
             "logConfiguration": logs("dashboard"),
         },
+        *[
+            {
+                "name": f"restore-{db}",
+                "image": litestream_image,
+                "essential": False,
+                "memoryReservation": 64,
+                "command": [
+                    "restore",
+                    "-config",
+                    "/etc/litestream.yml",
+                    "-if-replica-exists",
+                    "-force",
+                    "-integrity-check",
+                    "full",
+                    f"/var/lib/netbird/{db}.db",
+                ],
+                "mountPoints": litestream_mounts,
+                "logConfiguration": logs("restore"),
+            }
+            for db in DATABASES
+        ],
         {
             "name": "litestream",
             "image": litestream_image,
@@ -55,14 +88,10 @@ def container_definitions(
             "memoryReservation": 128,
             "command": ["replicate", "-config", "/etc/litestream.yml"],
             "stopTimeout": 60,
-            "mountPoints": [
-                {"sourceVolume": "netbird-data", "containerPath": "/var/lib/netbird"},
-                {
-                    "sourceVolume": "litestream-config",
-                    "containerPath": "/etc/litestream.yml",
-                    "readOnly": True,
-                },
+            "dependsOn": [
+                {"containerName": f"restore-{db}", "condition": "SUCCESS"} for db in DATABASES
             ],
+            "mountPoints": litestream_mounts,
             "logConfiguration": logs("litestream"),
         },
         {

@@ -163,7 +163,6 @@ def user_data(role: str) -> pulumi.Output[str]:
         region=region,
         cluster_name=NAME,
         service_name=NAME,
-        litestream_image=LITESTREAM_IMAGE,
         nb_dir=NB_DIR,
     )
 

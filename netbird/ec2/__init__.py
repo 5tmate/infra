@@ -17,7 +17,6 @@ def render_user_data(
     region: str,
     cluster_name: str,
     service_name: str,
-    litestream_image: str,
     nb_dir: str,
 ) -> pulumi.Output[str]:
     return pulumi.Output.from_input(bucket).apply(
@@ -26,7 +25,6 @@ def render_user_data(
             .replace("__REGION__", region)
             .replace("__CLUSTER__", cluster_name)
             .replace("__SERVICE__", service_name)
-            .replace("__LITESTREAM_IMAGE__", litestream_image)
             .replace("__ROLE__", role)
             .replace("__NB_DIR__", nb_dir)
         )

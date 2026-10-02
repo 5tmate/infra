@@ -5,7 +5,6 @@ BUCKET=__BUCKET__
 REGION=__REGION__
 CLUSTER=__CLUSTER__
 SERVICE=__SERVICE__
-LITESTREAM_IMAGE=__LITESTREAM_IMAGE__
 ROLE=__ROLE__
 NB_DIR=__NB_DIR__
 
@@ -15,16 +14,11 @@ set -euxo pipefail
 
 BUCKET=${BUCKET}
 REGION=${REGION}
-LITESTREAM_IMAGE=${LITESTREAM_IMAGE}
 ROLE=${ROLE}
 NB_DIR=${NB_DIR}
 PREPARE
 
 cat >> /usr/local/bin/netbird-prepare <<'PREPARE'
-
-have_replica() {
-  aws s3 ls "s3://${BUCKET}/$1/" --region "$REGION" >/dev/null 2>&1
-}
 
 retry() {
   local n=0
@@ -58,15 +52,6 @@ dbs:
       url: s3://${BUCKET}/events
       region: ${REGION}
 YML
-
-for db in store idp events; do
-  have_replica "$db" || continue
-  retry docker run --rm \
-    -v "${NB_DIR}/data:/var/lib/netbird" \
-    -v "${NB_DIR}/litestream.yml:/etc/litestream.yml:ro" \
-    "$LITESTREAM_IMAGE" restore -config /etc/litestream.yml \
-    -integrity-check full -force "/var/lib/netbird/${db}.db"
-done
 PREPARE
 chmod +x /usr/local/bin/netbird-prepare
 
