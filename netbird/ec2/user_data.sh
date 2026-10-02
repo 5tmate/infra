@@ -157,11 +157,11 @@ KICK
 
 cat >> /usr/local/bin/netbird-kick <<'KICK'
 until curl -sf http://localhost:51678/v1/metadata | grep -q '"ContainerInstanceArn":"arn:'; do sleep 2; done
-counts=$(aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" --region "$REGION" \
-  --query 'services[0].[runningCount,pendingCount]' --output text)
-if [ "$counts" = "$(printf '0\t0')" ]; then
+read -r running pending desired < <(aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" \
+  --region "$REGION" --query 'services[0].[runningCount,pendingCount,desiredCount]' --output text)
+if [ "$running" = 0 ] && [ "$pending" = 0 ]; then
   aws ecs update-service --cluster "$CLUSTER" --service "$SERVICE" --region "$REGION" \
-    --force-new-deployment --query service.serviceName --output text
+    --desired-count "$desired" --query service.serviceName --output text
 fi
 KICK
 chmod +x /usr/local/bin/netbird-kick

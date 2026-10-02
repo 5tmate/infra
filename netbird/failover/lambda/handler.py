@@ -167,8 +167,8 @@ def kick_service():
     service = ecs.describe_services(cluster=CLUSTER, services=[SERVICE])["services"][0]
     if service["runningCount"] or service["pendingCount"]:
         return "the service already has a task, nothing to do"
-    ecs.update_service(cluster=CLUSTER, service=SERVICE, forceNewDeployment=True)
-    return "the service had no task, started a new deployment so ECS places it now"
+    ecs.update_service(cluster=CLUSTER, service=SERVICE, desiredCount=service["desiredCount"])
+    return "the service had no task, asked ECS to place it now"
 
 
 def fail_over(context):
