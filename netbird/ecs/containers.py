@@ -2,6 +2,24 @@ DATABASES = ["store", "idp", "events"]
 DASHBOARD_HEALTH_SERVER = (
     "server { listen 127.0.0.1:8080; access_log off; root /usr/share/nginx/html; }"
 )
+LITESTREAM_HEALTH = """
+exec 3<>/dev/tcp/127.0.0.1/9090 || exit 1
+printf 'GET /metrics HTTP/1.0\\r\\n\\r\\n' >&3
+m=$(cat <&3)
+now=$(awk '/^litestream_sync_count[{ ]/ {s += $NF}
+  /^litestream_sync_error_count[{ ]/ {e += $NF}
+  /^litestream_disk_full[{ ]/ {f += $NF}
+  /^litestream_txid[{ ]/ {t += $NF}
+  /^litestream_replica_operation_total[{].*operation="PUT"/ {p += $NF}
+  END {printf "%.0f %.0f %.0f %.0f %.0f", s, e, f, t, p}' <<<"$m")
+prev=$(cat /tmp/health 2>/dev/null)
+echo "$now" > /tmp/health
+[ -n "$prev" ] || exit 0
+read -r s e f t p <<<"$now"
+read -r ps pe _ pt pp <<<"$prev"
+[ "$f" = 0 ] && [ "$e" = "$pe" ] && [ "$s" -gt "$ps" ] || exit 1
+[ "$t" = "$pt" ] || [ "$p" -gt "$pp" ]
+"""
 
 
 def container_definitions(
@@ -100,9 +118,22 @@ def container_definitions(
         {
             "name": "litestream",
             "image": litestream_image,
-            "essential": True,
+            "essential": False,
             "memoryReservation": 128,
-            "command": ["replicate", "-config", "/etc/litestream.yml"],
+            "entryPoint": ["bash", "-c"],
+            "command": [
+                "cp /etc/litestream.yml /tmp/litestream.yml"
+                " && echo 'addr: 127.0.0.1:9090' >> /tmp/litestream.yml"
+                " && exec litestream replicate -config /tmp/litestream.yml"
+            ],
+            "healthCheck": {
+                "command": ["CMD", "bash", "-c", LITESTREAM_HEALTH],
+                "interval": 10,
+                "timeout": 5,
+                "retries": 3,
+                "startPeriod": 60,
+            },
+            "restartPolicy": {"enabled": True, "restartAttemptPeriod": 60},
             "stopTimeout": 60,
             "dependsOn": [
                 {"containerName": f"restore-{db}", "condition": "SUCCESS"} for db in DATABASES
