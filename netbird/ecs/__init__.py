@@ -97,6 +97,7 @@ class NetBirdService(pulumi.ComponentResource):
                     server_image=server_image,
                     stun_image=stun_image,
                     aws_cli_image=aws_cli_image,
+                    server_name=certificate_domains[0],
                 )
             ),
             tags=tags,

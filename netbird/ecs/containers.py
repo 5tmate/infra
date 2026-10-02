@@ -17,6 +17,7 @@ def container_definitions(
     server_image,
     stun_image,
     aws_cli_image,
+    server_name,
 ):
     def logs(stream):
         return {
@@ -134,6 +135,21 @@ def container_definitions(
                 {"containerName": "config", "condition": "SUCCESS"},
             ],
             "portMappings": [{"containerPort": 443, "hostPort": 443, "protocol": "tcp"}],
+            "healthCheck": {
+                "command": [
+                    "CMD",
+                    "bash",
+                    "-c",
+                    "printf 'GET /oauth2/.well-known/openid-configuration HTTP/1.0\\r\\n"
+                    f"Host: {server_name}\\r\\n\\r\\n' | openssl s_client -quiet "
+                    f"-connect 127.0.0.1:443 -servername {server_name} 2>/dev/null "
+                    "| head -1 | grep -q ' 200 '",
+                ],
+                "interval": 10,
+                "timeout": 5,
+                "retries": 3,
+                "startPeriod": 300,
+            },
             "mountPoints": [
                 {"sourceVolume": "netbird-data", "containerPath": "/var/lib/netbird"},
                 {
