@@ -37,6 +37,21 @@ def bucket_access(arn: str) -> str:
     )
 
 
+def service_update(service_arn: str) -> str:
+    return json.dumps(
+        {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Effect": "Allow",
+                    "Action": ["ecs:DescribeServices", "ecs:UpdateService"],
+                    "Resource": service_arn,
+                }
+            ],
+        }
+    )
+
+
 def dns01_challenge(zone_id: str, domains: Sequence[str]) -> str:
     return json.dumps(
         {

@@ -4,6 +4,7 @@ set -euxo pipefail
 BUCKET=__BUCKET__
 REGION=__REGION__
 CLUSTER=__CLUSTER__
+SERVICE=__SERVICE__
 LITESTREAM_IMAGE=__LITESTREAM_IMAGE__
 ROLE=__ROLE__
 NB_DIR=__NB_DIR__
@@ -161,6 +162,40 @@ Persistent=true
 WantedBy=timers.target
 UNIT
 
+cat > /usr/local/bin/netbird-kick <<KICK
+#!/bin/bash
+set -euo pipefail
+REGION=${REGION}
+CLUSTER=${CLUSTER}
+SERVICE=${SERVICE}
+KICK
+
+cat >> /usr/local/bin/netbird-kick <<'KICK'
+until curl -sf http://localhost:51678/v1/metadata | grep -q '"ContainerInstanceArn":"arn:'; do sleep 2; done
+counts=$(aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" --region "$REGION" \
+  --query 'services[0].[runningCount,pendingCount]' --output text)
+if [ "$counts" = "$(printf '0\t0')" ]; then
+  aws ecs update-service --cluster "$CLUSTER" --service "$SERVICE" --region "$REGION" \
+    --force-new-deployment --query service.serviceName --output text
+fi
+KICK
+chmod +x /usr/local/bin/netbird-kick
+
+cat > /etc/systemd/system/netbird-kick.service <<'UNIT'
+[Unit]
+Description=Ask ECS to place the NetBird task as soon as this instance joins, instead of waiting for its next retry
+After=ecs.service
+Wants=ecs.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/netbird-kick
+TimeoutStartSec=600
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
 cat > /etc/systemd/system/netbird-prepare.service <<'UNIT'
 [Unit]
 Description=Restore NetBird state from S3 before the ECS agent joins the cluster
@@ -193,6 +228,11 @@ systemctl enable netbird-prepare.service
 systemctl enable --now netbird-backup-certs.timer
 systemctl enable --now netbird-update-geolite.timer
 systemctl start netbird-prepare.service
+
+if [ "$ROLE" = "primary" ]; then
+  systemctl enable netbird-kick.service
+  systemctl start --no-block netbird-kick.service
+fi
 
 if [ "$ROLE" = "standby" ]; then
   systemctl mask --runtime ecs.service

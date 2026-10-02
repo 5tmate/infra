@@ -16,6 +16,7 @@ def render_user_data(
     bucket: pulumi.Input[str],
     region: str,
     cluster_name: str,
+    service_name: str,
     litestream_image: str,
     nb_dir: str,
 ) -> pulumi.Output[str]:
@@ -24,6 +25,7 @@ def render_user_data(
             USER_DATA_TEMPLATE.replace("__BUCKET__", b)
             .replace("__REGION__", region)
             .replace("__CLUSTER__", cluster_name)
+            .replace("__SERVICE__", service_name)
             .replace("__LITESTREAM_IMAGE__", litestream_image)
             .replace("__ROLE__", role)
             .replace("__NB_DIR__", nb_dir)
@@ -80,6 +82,17 @@ class SpotHost(pulumi.ComponentResource):
             opts=child,
         )
 
+        service_update = aws.iam.RolePolicy(
+            "instance-service-update",
+            role=role.name,
+            policy=cluster.arn.apply(
+                lambda arn: policies.service_update(
+                    f"{arn.replace(':cluster/', ':service/')}/{resource_name}"
+                )
+            ),
+            opts=child,
+        )
+
         launch_template = aws.ec2.LaunchTemplate(
             "launch-template",
             name_prefix=f"{resource_name}-",
@@ -106,7 +119,9 @@ class SpotHost(pulumi.ComponentResource):
                 {"resource_type": "volume", "tags": tags},
             ],
             tags=tags,
-            opts=pulumi.ResourceOptions(parent=self, depends_on=[self.backup_access]),
+            opts=pulumi.ResourceOptions(
+                parent=self, depends_on=[self.backup_access, service_update]
+            ),
         )
 
         self.asg = aws.autoscaling.Group(
