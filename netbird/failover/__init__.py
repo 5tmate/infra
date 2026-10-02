@@ -43,7 +43,8 @@ def _log_delivery_policy(log_group_arn: str) -> str:
     )
 
 
-def _lambda_policy(cluster_arn: str, topic_arn: str, standby_name: str) -> str:
+def _lambda_policy(cluster_arn: str, topic_arn: str, standby_name: str, service_name: str) -> str:
+    service_arn = f"{cluster_arn.replace(':cluster/', ':service/')}/{service_name}"
     return json.dumps(
         {
             "Version": "2012-10-17",
@@ -80,6 +81,11 @@ def _lambda_policy(cluster_arn: str, topic_arn: str, standby_name: str) -> str:
                     "Action": ["ec2:StartInstances", "ec2:StopInstances"],
                     "Resource": "*",
                     "Condition": {"StringEquals": {"ec2:ResourceTag/Name": standby_name}},
+                },
+                {
+                    "Effect": "Allow",
+                    "Action": ["ecs:DescribeServices", "ecs:UpdateService"],
+                    "Resource": service_arn,
                 },
                 {"Effect": "Allow", "Action": "sns:Publish", "Resource": topic_arn},
             ],
@@ -249,7 +255,7 @@ class Failover(pulumi.ComponentResource):
             "failover-lambda-policy",
             role=role.name,
             policy=pulumi.Output.all(cluster.arn, self.alerts.arn).apply(
-                lambda a: _lambda_policy(a[0], a[1], standby_name)
+                lambda a: _lambda_policy(a[0], a[1], standby_name, resource_name)
             ),
             opts=child,
         )

@@ -163,6 +163,14 @@ def place_eip(event):
     return f"moved the elastic ip to {instance_id}"
 
 
+def kick_service():
+    service = ecs.describe_services(cluster=CLUSTER, services=[SERVICE])["services"][0]
+    if service["runningCount"] or service["pendingCount"]:
+        return "the service already has a task, nothing to do"
+    ecs.update_service(cluster=CLUSTER, service=SERVICE, forceNewDeployment=True)
+    return "the service had no task, started a new deployment so ECS places it now"
+
+
 def fail_over(context):
     if healthy():
         return f"{DOMAIN} still answers, nothing to do"
@@ -194,6 +202,7 @@ def fail_over(context):
         raise Failed(f"standby {instance_id} never joined the cluster")
 
     if running_task_host() != arn:
+        log.info("deploy: %s", kick_service())
         wait_task_on(context, arn, budget=300)
 
     if eip_holder() != instance_id:
