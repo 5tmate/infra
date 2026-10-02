@@ -2,24 +2,102 @@ DATABASES = ["store", "idp", "events"]
 DASHBOARD_HEALTH_SERVER = (
     "server { listen 127.0.0.1:8080; access_log off; root /usr/share/nginx/html; }"
 )
-LITESTREAM_HEALTH = """
-exec 3<>/dev/tcp/127.0.0.1/9090 || exit 1
-printf 'GET /metrics HTTP/1.0\\r\\n\\r\\n' >&3
-m=$(cat <&3)
-now=$(awk '/^litestream_sync_count[{ ]/ {s += $NF}
+DASHBOARD_PROBE = "curl -m 3 -fsS -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/"
+SERVER_PROBE = """
+req='GET /oauth2/.well-known/openid-configuration HTTP/1.0\\r\\nHost: __SERVER__\\r\\n\\r\\n'
+line=$(printf '%b' "$req" | timeout 3 openssl s_client -quiet -connect 127.0.0.1:443 \\
+  -servername __SERVER__ 2>/dev/null | head -1 | tr -d '\\r')
+echo "${line:-no response}"
+case "$line" in *" 200 "*) return 0 ;; esac
+return 1
+"""
+STUN_PROBE = """
+wget -q -T 3 -O /dev/null http://127.0.0.1:9000/health && return 0
+echo "relay health endpoint failed"
+return 1
+"""
+LITESTREAM_PROBE = """
+m=$(timeout 3 bash -c 'exec 3<>/dev/tcp/127.0.0.1/9090 \\
+  && printf "GET /metrics HTTP/1.0\\r\\n\\r\\n" >&3 && cat <&3' 2>/dev/null) \\
+  || { echo "metrics unreachable"; return 1; }
+cur=$(awk '/^litestream_sync_count[{ ]/ {s += $NF}
   /^litestream_sync_error_count[{ ]/ {e += $NF}
   /^litestream_disk_full[{ ]/ {f += $NF}
   /^litestream_txid[{ ]/ {t += $NF}
   /^litestream_replica_operation_total[{].*operation="PUT"/ {p += $NF}
   END {printf "%.0f %.0f %.0f %.0f %.0f", s, e, f, t, p}' <<<"$m")
 prev=$(cat /tmp/health 2>/dev/null)
-echo "$now" > /tmp/health
-[ -n "$prev" ] || exit 0
-read -r s e f t p <<<"$now"
+echo "$cur" > /tmp/health
+[ -n "$prev" ] || return 0
+read -r s e f t p <<<"$cur"
 read -r ps pe _ pt pp <<<"$prev"
-[ "$f" = 0 ] && [ "$e" = "$pe" ] && [ "$s" -gt "$ps" ] || exit 1
-[ "$t" = "$pt" ] || [ "$p" -gt "$pp" ]
+[ "$f" = 0 ] || { echo "disk full"; return 1; }
+[ "$e" = "$pe" ] || { echo "sync errors increased"; return 1; }
+[ "$s" -gt "$ps" ] || { echo "sync stuck"; return 1; }
+[ "$t" = "$pt" ] || [ "$p" -gt "$pp" ] || { echo "new data not uploaded"; return 1; }
 """
+HEALTH_WRAPPER = """
+probe() {
+__PROBE__
+}
+cause() {
+  avail=$(awk '/^MemAvailable:/ {print int($2 / 1024)}' /proc/meminfo)
+  total=$(awk '/^MemTotal:/ {print int($2 / 1024)}' /proc/meminfo)
+  oom=$(awk '/^oom_kill / {print $2}' /sys/fs/cgroup/memory.events 2>/dev/null)
+  load=$(cut -d ' ' -f 1 /proc/loadavg)
+  cpus=$(grep -c ^processor /proc/cpuinfo)
+  disk=$(df -P / | awk 'NR == 2 {print int($5)}')
+  if [ "$avail" -lt $((total / 10)) ] || [ "${oom:-0}" -gt 0 ]; then c=memory
+  elif awk -v l="$load" -v n="$cpus" 'BEGIN {exit !(l > n)}'; then c=cpu
+  elif [ "$disk" -ge 95 ]; then c=disk
+  else c=program
+  fi
+  echo "cause=$c (memory available $avail/$total MiB, oom kills ${oom:-0}," \\
+    "load $load on $cpus cpus, disk $disk%)"
+}
+say() { echo "HEALTHCHECK $*" > /proc/1/fd/1; }
+now=$(date +%s)
+age=$(awk -v u="$(cut -d ' ' -f 1 /proc/uptime)" '{print int(u - $22 / 100)}' /proc/1/stat)
+n=$(cat /tmp/hc-fails 2>/dev/null || echo 0)
+if why=$(probe); then
+  if [ "$n" -ge __RETRIES__ ]; then
+    red=$(cat /tmp/hc-red 2>/dev/null || echo "$now")
+    say "recovered after $((now - red))s"
+  fi
+  echo 0 > /tmp/hc-fails
+  exit 0
+fi
+[ "$age" -ge __START__ ] || exit 1
+n=$((n + 1))
+echo "$n" > /tmp/hc-fails
+if [ "$n" -eq __RETRIES__ ]; then
+  echo "$now" > /tmp/hc-red
+  echo "$now" > /tmp/hc-said
+  say "unhealthy ${why:+($why) }$(cause)"
+  __ON_UNHEALTHY__
+elif [ "$n" -gt __RETRIES__ ] && [ $((now - $(cat /tmp/hc-said))) -ge 300 ]; then
+  echo "$now" > /tmp/hc-said
+  red=$(cat /tmp/hc-red)
+  say "still unhealthy for $(( (now - red) / 60 ))m ${why:+($why) }$(cause)"
+fi
+exit 1
+"""
+
+
+def health_check(shell, probe, *, interval, retries, start_period, on_unhealthy=""):
+    script = (
+        HEALTH_WRAPPER.replace("__PROBE__", probe.strip())
+        .replace("__RETRIES__", str(retries))
+        .replace("__START__", str(start_period))
+        .replace("__ON_UNHEALTHY__", on_unhealthy)
+    )
+    return {
+        "command": ["CMD", shell, "-c", script],
+        "interval": interval,
+        "timeout": 5,
+        "retries": retries,
+        "startPeriod": start_period,
+    }
 
 
 def container_definitions(
@@ -85,13 +163,9 @@ def container_definitions(
                 f"echo '{DASHBOARD_HEALTH_SERVER}' > /etc/nginx/http.d/health.conf"
                 " && exec /usr/bin/supervisord -c /etc/supervisord.conf"
             ],
-            "healthCheck": {
-                "command": ["CMD-SHELL", "curl -fsS -o /dev/null http://127.0.0.1:8080/ || exit 1"],
-                "interval": 5,
-                "timeout": 5,
-                "retries": 2,
-                "startPeriod": 30,
-            },
+            "healthCheck": health_check(
+                "sh", DASHBOARD_PROBE, interval=5, retries=2, start_period=30
+            ),
             "logConfiguration": logs("dashboard"),
         },
         *[
@@ -126,13 +200,9 @@ def container_definitions(
                 " && echo 'addr: 127.0.0.1:9090' >> /tmp/litestream.yml"
                 " && exec litestream replicate -config /tmp/litestream.yml"
             ],
-            "healthCheck": {
-                "command": ["CMD", "bash", "-c", LITESTREAM_HEALTH],
-                "interval": 10,
-                "timeout": 5,
-                "retries": 3,
-                "startPeriod": 60,
-            },
+            "healthCheck": health_check(
+                "bash", LITESTREAM_PROBE, interval=10, retries=3, start_period=60
+            ),
             "restartPolicy": {"enabled": True, "restartAttemptPeriod": 60},
             "stopTimeout": 60,
             "dependsOn": [
@@ -166,21 +236,13 @@ def container_definitions(
                 {"containerName": "config", "condition": "SUCCESS"},
             ],
             "portMappings": [{"containerPort": 443, "hostPort": 443, "protocol": "tcp"}],
-            "healthCheck": {
-                "command": [
-                    "CMD",
-                    "bash",
-                    "-c",
-                    "printf 'GET /oauth2/.well-known/openid-configuration HTTP/1.0\\r\\n"
-                    f"Host: {server_name}\\r\\n\\r\\n' | openssl s_client -quiet "
-                    f"-connect 127.0.0.1:443 -servername {server_name} 2>/dev/null "
-                    "| head -1 | grep -q ' 200 '",
-                ],
-                "interval": 5,
-                "timeout": 5,
-                "retries": 2,
-                "startPeriod": 300,
-            },
+            "healthCheck": health_check(
+                "bash",
+                SERVER_PROBE.replace("__SERVER__", server_name),
+                interval=5,
+                retries=2,
+                start_period=300,
+            ),
             "mountPoints": [
                 {"sourceVolume": "netbird-data", "containerPath": "/var/lib/netbird"},
                 {
@@ -204,22 +266,13 @@ def container_definitions(
                 {"name": "NB_AUTH_SECRET", "value": "stun-only"},
             ],
             "portMappings": [{"containerPort": 3478, "hostPort": 3478, "protocol": "udp"}],
-            "healthCheck": {
-                "command": [
-                    "CMD",
-                    "/busybox/wget",
-                    "-q",
-                    "-T",
-                    "4",
-                    "-O",
-                    "/dev/null",
-                    "http://127.0.0.1:9000/health",
-                ],
-                "interval": 5,
-                "timeout": 5,
-                "retries": 2,
-                "startPeriod": 30,
-            },
+            "healthCheck": health_check(
+                "/busybox/sh",
+                STUN_PROBE,
+                interval=5,
+                retries=2,
+                start_period=30,
+            ),
             "logConfiguration": logs("stun"),
         },
     ]
