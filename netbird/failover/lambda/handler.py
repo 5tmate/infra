@@ -4,11 +4,13 @@ import ssl
 import time
 import urllib.error
 import urllib.request
+from datetime import UTC, datetime
 
 import boto3
 
 CLUSTER = os.environ["CLUSTER"]
 SERVICE = os.environ["SERVICE"]
+ASG_NAME = os.environ["ASG_NAME"]
 STANDBY_NAME = os.environ["STANDBY_NAME"]
 EIP_ALLOC = os.environ["EIP_ALLOC"]
 DOMAIN = os.environ["DOMAIN"]
@@ -16,6 +18,7 @@ HEALTH_URL = os.environ["HEALTH_URL"]
 NO_CAPACITY_ALARM = os.environ["NO_CAPACITY_ALARM"]
 CAPACITY_STABLE_ALARM = os.environ["CAPACITY_STABLE_ALARM"]
 TOPIC_ARN = os.environ["TOPIC_ARN"]
+FAILOVER_EVENT_MAX_AGE = 300
 
 log = logging.getLogger()
 log.setLevel(logging.INFO)
@@ -23,6 +26,7 @@ log.setLevel(logging.INFO)
 ecs = boto3.client("ecs")
 ec2 = boto3.client("ec2")
 sns = boto3.client("sns")
+autoscaling = boto3.client("autoscaling")
 
 
 class Failed(Exception):
@@ -35,6 +39,21 @@ def notify(subject, body):
 
 def remaining(context):
     return context.get_remaining_time_in_millis() / 1000.0
+
+
+def event_age(event):
+    sent = datetime.fromisoformat(event["time"].replace("Z", "+00:00"))
+    return (datetime.now(UTC) - sent).total_seconds()
+
+
+def group():
+    return autoscaling.describe_auto_scaling_groups(AutoScalingGroupNames=[ASG_NAME])[
+        "AutoScalingGroups"
+    ][0]
+
+
+def in_service(asg):
+    return [i["InstanceId"] for i in asg["Instances"] if i["LifecycleState"] == "InService"]
 
 
 def standby_instance():
@@ -213,6 +232,18 @@ def fail_over(context):
     return f"switched to standby {instance_id}"
 
 
+def launch_failed(event, context):
+    age = event_age(event)
+    if age > FAILOVER_EVENT_MAX_AGE:
+        return f"the failed launch is {age:.0f}s old, nothing to do"
+    asg = group()
+    if asg["DesiredCapacity"] != 1:
+        return f"desired capacity is {asg['DesiredCapacity']}, nothing to do"
+    if in_service(asg):
+        return f"{in_service(asg)[0]} is in service, nothing to do"
+    return fail_over(context)
+
+
 def fail_back(context):
     instance_id, state = standby_instance()
     if state != "running":
@@ -255,30 +286,9 @@ def fail_back(context):
     return f"handed back to {primary_id}, standby {instance_id} stopping"
 
 
-def handler(event, context):
-    if event.get("detail-type") == "ECS Task State Change":
-        log.info("a task reached %s", event.get("detail", {}).get("lastStatus"))
-        outcome = place_eip(event)
-        log.info("eip: %s", outcome)
-        return {"action": "eip", "outcome": outcome}
-
-    detail = event.get("detail", {})
-    name = detail.get("alarmName")
-    state = detail.get("state", {}).get("value")
-    log.info("alarm %s is %s", name, state)
-
-    if state != "ALARM":
-        return {"skipped": f"state is {state}"}
-
-    if name == NO_CAPACITY_ALARM:
-        action, run_it = "failover", fail_over
-    elif name == CAPACITY_STABLE_ALARM:
-        action, run_it = "failback", fail_back
-    else:
-        return {"skipped": f"unknown alarm {name}"}
-
+def run(action, step):
     try:
-        outcome = run_it(context)
+        outcome = step()
     except Exception as e:
         log.exception("%s failed", action)
         notify(f"netbird {action} failed", f"{type(e).__name__}: {e}")
@@ -288,3 +298,31 @@ def handler(event, context):
     if not outcome.endswith("nothing to do"):
         notify(f"netbird {action}", outcome)
     return {"action": action, "outcome": outcome}
+
+
+def handler(event, context):
+    kind = event.get("detail-type")
+    if kind == "ECS Task State Change":
+        log.info("a task reached %s", event.get("detail", {}).get("lastStatus"))
+        outcome = place_eip(event)
+        log.info("eip: %s", outcome)
+        return {"action": "eip", "outcome": outcome}
+
+    if kind == "EC2 Instance Launch Unsuccessful":
+        log.info("the group could not launch an instance")
+        return run("failover", lambda: launch_failed(event, context))
+
+    if kind != "CloudWatch Alarm State Change":
+        return {"skipped": f"{kind} needs no action"}
+
+    detail = event.get("detail", {})
+    name = detail.get("alarmName")
+    state = detail.get("state", {}).get("value")
+    log.info("alarm %s is %s", name, state)
+    if state != "ALARM":
+        return {"skipped": f"state is {state}"}
+    if name == NO_CAPACITY_ALARM:
+        return run("failover", lambda: fail_over(context))
+    if name == CAPACITY_STABLE_ALARM:
+        return run("failback", lambda: fail_back(context))
+    return {"skipped": f"unknown alarm {name}"}

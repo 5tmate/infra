@@ -87,6 +87,11 @@ def _lambda_policy(cluster_arn: str, topic_arn: str, standby_name: str, service_
                     "Action": ["ecs:DescribeServices", "ecs:UpdateService"],
                     "Resource": service_arn,
                 },
+                {
+                    "Effect": "Allow",
+                    "Action": "autoscaling:DescribeAutoScalingGroups",
+                    "Resource": "*",
+                },
                 {"Effect": "Allow", "Action": "sns:Publish", "Resource": topic_arn},
             ],
         }
@@ -274,6 +279,7 @@ class Failover(pulumi.ComponentResource):
                 "variables": {
                     "CLUSTER": cluster.name,
                     "SERVICE": resource_name,
+                    "ASG_NAME": asg_name,
                     "STANDBY_NAME": standby_name,
                     "EIP_ALLOC": eip_id,
                     "DOMAIN": management_domain,
@@ -323,6 +329,22 @@ class Failover(pulumi.ComponentResource):
             function=self.function.name,
             principal="events.amazonaws.com",
             source_arn=task_events.arn,
+            opts=child,
+        )
+
+        aws.cloudwatch.EventTarget(
+            "scaling-events-to-lambda",
+            rule=scaling_events.name,
+            target_id="failover",
+            arn=self.function.arn,
+            opts=child,
+        )
+        aws.lambda_.Permission(
+            "scaling-events-invoke",
+            action="lambda:InvokeFunction",
+            function=self.function.name,
+            principal="events.amazonaws.com",
+            source_arn=scaling_events.arn,
             opts=child,
         )
 
