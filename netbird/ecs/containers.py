@@ -1,4 +1,7 @@
 DATABASES = ["store", "idp", "events"]
+DASHBOARD_HEALTH_SERVER = (
+    "server { listen 127.0.0.1:8080; access_log off; root /usr/share/nginx/html; }"
+)
 
 
 def container_definitions(
@@ -58,6 +61,18 @@ def container_definitions(
                 {"name": "NGINX_SSL_PORT", "value": "443"},
                 {"name": "LETSENCRYPT_DOMAIN", "value": "none"},
             ],
+            "entryPoint": ["sh", "-c"],
+            "command": [
+                f"echo '{DASHBOARD_HEALTH_SERVER}' > /etc/nginx/http.d/health.conf"
+                " && exec /usr/bin/supervisord -c /etc/supervisord.conf"
+            ],
+            "healthCheck": {
+                "command": ["CMD-SHELL", "curl -fsS -o /dev/null http://127.0.0.1:8080/ || exit 1"],
+                "interval": 10,
+                "timeout": 5,
+                "retries": 3,
+                "startPeriod": 30,
+            },
             "logConfiguration": logs("dashboard"),
         },
         *[
