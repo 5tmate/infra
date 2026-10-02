@@ -264,6 +264,7 @@ def container_definitions(
                 {"name": "NB_LISTEN_ADDRESS", "value": "127.0.0.1:33080"},
                 {"name": "NB_EXPOSED_ADDRESS", "value": "rel://127.0.0.1:33080"},
                 {"name": "NB_AUTH_SECRET", "value": "stun-only"},
+                {"name": "NB_LOG_LEVEL", "value": "warn"},
             ],
             "portMappings": [{"containerPort": 3478, "hostPort": 3478, "protocol": "udp"}],
             "healthCheck": health_check(
