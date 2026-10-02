@@ -272,7 +272,9 @@ def container_definitions(
                 interval=5,
                 retries=2,
                 start_period=30,
+                on_unhealthy="kill -TERM 1",
             ),
+            "restartPolicy": {"enabled": True, "restartAttemptPeriod": 300},
             "logConfiguration": logs("stun"),
         },
     ]
