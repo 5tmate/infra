@@ -11,7 +11,7 @@ echo "${line:-no response}"
 case "$line" in *" 200 "*) return 0 ;; esac
 return 1
 """
-SERVER_HOLD = 75
+SERVER_HOLD = 60
 SERVER_ENTRY = """
 probe() {
 __PROBE__
