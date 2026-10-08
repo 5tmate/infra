@@ -20,6 +20,7 @@ TOPIC_ARN = os.environ["TOPIC_ARN"]
 FAILOVER_EVENT_MAX_AGE = 300
 PRIMARY_JOIN_BUDGET = 120
 FAILBACK_SOAK = 180
+DISCONNECT_RECHECK = 10
 
 log = logging.getLogger()
 log.setLevel(logging.INFO)
@@ -247,19 +248,34 @@ def launch_failed(event, context):
     return fail_over(context, check_health=False)
 
 
-def primary_draining(event):
+def replace_reason(instance_id):
+    host = container_instances().get(instance_id)
+    if not host:
+        return None
+    if host["status"] == "DRAINING":
+        return "is draining while in service"
+    if host.get("agentConnected") or healthy():
+        return None
+    time.sleep(DISCONNECT_RECHECK)
+    host = container_instances().get(instance_id)
+    if not host or host.get("agentConnected") or healthy():
+        return None
+    return f"lost its ECS agent and {DOMAIN} is silent"
+
+
+def replace_primary(event):
     instance_id = event.get("detail", {}).get("ec2InstanceId")
     if not instance_id:
         return "the event names no instance, nothing to do"
     if instance_id not in in_service(group()):
         return f"{instance_id} is not in service in the group, nothing to do"
-    host = container_instances().get(instance_id)
-    if not host or host["status"] != "DRAINING":
-        return f"{instance_id} is no longer draining, nothing to do"
+    reason = replace_reason(instance_id)
+    if not reason:
+        return f"{instance_id} is neither draining nor down, nothing to do"
     autoscaling.set_instance_health(
         InstanceId=instance_id, HealthStatus="Unhealthy", ShouldRespectGracePeriod=False
     )
-    return f"{instance_id} is draining while in service, asked the group to replace it"
+    return f"{instance_id} {reason}, asked the group to replace it"
 
 
 def primary_ready(instance_id):
@@ -364,8 +380,14 @@ def handler(event, context):
         return {"action": "eip", "outcome": outcome}
 
     if kind == "ECS Container Instance State Change":
-        log.info("%s is draining", event.get("detail", {}).get("ec2InstanceId"))
-        return run("replace", lambda: primary_draining(event))
+        detail = event.get("detail", {})
+        log.info(
+            "%s is %s, agent connected: %s",
+            detail.get("ec2InstanceId"),
+            detail.get("status"),
+            detail.get("agentConnected"),
+        )
+        return run("replace", lambda: replace_primary(event))
 
     if kind == "EC2 Instance Launch Unsuccessful":
         log.info("the group could not launch an instance")

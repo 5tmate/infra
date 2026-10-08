@@ -140,6 +140,10 @@ def _ecs_events_pattern(cluster_arn: str, service_name: str) -> str:
                     "detail-type": ["ECS Container Instance State Change"],
                     "detail": {"clusterArn": [cluster_arn], "status": ["DRAINING"]},
                 },
+                {
+                    "detail-type": ["ECS Container Instance State Change"],
+                    "detail": {"clusterArn": [cluster_arn], "agentConnected": [False]},
+                },
             ],
         }
     )
@@ -313,7 +317,10 @@ class Failover(pulumi.ComponentResource):
         task_events = aws.cloudwatch.EventRule(
             "task-events",
             name=f"{resource_name}-task-events",
-            description="a task of this service reaching RUNNING, or a container instance draining",
+            description=(
+                "a task of this service reaching RUNNING, "
+                "or a container instance draining or losing its agent"
+            ),
             event_pattern=cluster.arn.apply(lambda arn: _ecs_events_pattern(arn, resource_name)),
             tags=tags,
             opts=child,
