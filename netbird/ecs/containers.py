@@ -189,6 +189,7 @@ def container_definitions(
             "healthCheck": health_check(
                 "sh", DASHBOARD_PROBE, interval=5, retries=2, start_period=30
             ),
+            "stopTimeout": 15,
             "logConfiguration": logs("dashboard"),
         },
         *[
@@ -263,6 +264,8 @@ def container_definitions(
             "dependsOn": [
                 {"containerName": "litestream", "condition": "START"},
                 {"containerName": "config", "condition": "SUCCESS"},
+                {"containerName": "dashboard", "condition": "START"},
+                {"containerName": "stun", "condition": "START"},
             ],
             "portMappings": [{"containerPort": 443, "hostPort": 443, "protocol": "tcp"}],
             "healthCheck": health_check(
@@ -305,6 +308,7 @@ def container_definitions(
                 on_unhealthy="kill -TERM 1",
             ),
             "restartPolicy": {"enabled": True, "restartAttemptPeriod": 300},
+            "stopTimeout": 15,
             "logConfiguration": logs("stun"),
         },
     ]
