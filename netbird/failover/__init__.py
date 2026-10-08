@@ -58,7 +58,7 @@ def _lambda_policy(
             "Statement": [
                 {
                     "Effect": "Allow",
-                    "Action": ["ecs:ListContainerInstances"],
+                    "Action": ["ecs:ListContainerInstances", "ecs:DeregisterContainerInstance"],
                     "Resource": cluster_arn,
                 },
                 {

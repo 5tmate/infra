@@ -248,19 +248,18 @@ def launch_failed(event, context):
     return fail_over(context, check_health=False)
 
 
-def replace_reason(instance_id):
-    host = container_instances().get(instance_id)
-    if not host:
-        return None
-    if host["status"] == "DRAINING":
-        return "is draining while in service"
-    if host.get("agentConnected") or healthy():
-        return None
+def agent_gone(instance_id):
+    if healthy():
+        return False
     time.sleep(DISCONNECT_RECHECK)
     host = container_instances().get(instance_id)
-    if not host or host.get("agentConnected") or healthy():
-        return None
-    return f"lost its ECS agent and {DOMAIN} is silent"
+    return bool(host) and not host.get("agentConnected") and not healthy()
+
+
+def mark_unhealthy(instance_id):
+    autoscaling.set_instance_health(
+        InstanceId=instance_id, HealthStatus="Unhealthy", ShouldRespectGracePeriod=False
+    )
 
 
 def replace_primary(event):
@@ -269,13 +268,22 @@ def replace_primary(event):
         return "the event names no instance, nothing to do"
     if instance_id not in in_service(group()):
         return f"{instance_id} is not in service in the group, nothing to do"
-    reason = replace_reason(instance_id)
-    if not reason:
+    host = container_instances().get(instance_id)
+    if not host:
+        return f"{instance_id} is not in the cluster, nothing to do"
+    if host["status"] == "DRAINING":
+        mark_unhealthy(instance_id)
+        return f"{instance_id} is draining while in service, asked the group to replace it"
+    if host.get("agentConnected") or not agent_gone(instance_id):
         return f"{instance_id} is neither draining nor down, nothing to do"
-    autoscaling.set_instance_health(
-        InstanceId=instance_id, HealthStatus="Unhealthy", ShouldRespectGracePeriod=False
+    mark_unhealthy(instance_id)
+    ecs.deregister_container_instance(
+        cluster=CLUSTER, containerInstance=host["containerInstanceArn"], force=True
     )
-    return f"{instance_id} {reason}, asked the group to replace it"
+    return (
+        f"{instance_id} lost its ECS agent and {DOMAIN} is silent, "
+        "asked the group to replace it and deregistered it so its task stops"
+    )
 
 
 def primary_ready(instance_id):
