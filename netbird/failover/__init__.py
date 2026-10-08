@@ -26,24 +26,6 @@ def _publish_policy(topic_arn: str) -> str:
     )
 
 
-def _log_delivery_policy(log_group_arn: str) -> str:
-    return json.dumps(
-        {
-            "Version": "2012-10-17",
-            "Statement": [
-                {
-                    "Effect": "Allow",
-                    "Principal": {
-                        "Service": ["events.amazonaws.com", "delivery.logs.amazonaws.com"]
-                    },
-                    "Action": ["logs:CreateLogStream", "logs:PutLogEvents"],
-                    "Resource": f"{log_group_arn}:*",
-                }
-            ],
-        }
-    )
-
-
 def _lambda_policy(
     cluster_arn: str, topic_arn: str, standby_name: str, service_name: str, asg_name: str
 ) -> str:
@@ -196,33 +178,12 @@ class Failover(pulumi.ComponentResource):
             opts=child,
         )
 
-        self.event_log = aws.cloudwatch.LogGroup(
-            "event-log",
-            name=f"/aws/events/{resource_name}",
-            retention_in_days=7,
-            tags=tags,
-            opts=child,
-        )
-        aws.cloudwatch.LogResourcePolicy(
-            "event-log-policy",
-            policy_name=f"{resource_name}-asg-events",
-            policy_document=self.event_log.arn.apply(_log_delivery_policy),
-            opts=child,
-        )
-
         scaling_events = aws.cloudwatch.EventRule(
             "scaling-events",
             name=f"{resource_name}-asg-events",
             description="every scaling event this group emits",
             event_pattern=_scaling_events_pattern(resource_name),
             tags=tags,
-            opts=child,
-        )
-        aws.cloudwatch.EventTarget(
-            "scaling-events-to-log",
-            rule=scaling_events.name,
-            target_id="log",
-            arn=self.event_log.arn,
             opts=child,
         )
 
@@ -232,13 +193,6 @@ class Failover(pulumi.ComponentResource):
             description="the no-capacity alarm entering ALARM",
             event_pattern=no_capacity.name.apply(lambda name: _alarm_events_pattern([name])),
             tags=tags,
-            opts=child,
-        )
-        aws.cloudwatch.EventTarget(
-            "alarm-events-to-log",
-            rule=alarm_events.name,
-            target_id="log",
-            arn=self.event_log.arn,
             opts=child,
         )
 
@@ -261,6 +215,14 @@ class Failover(pulumi.ComponentResource):
             policy=pulumi.Output.all(cluster.arn, self.alerts.arn, asg_name).apply(
                 lambda a: _lambda_policy(a[0], a[1], standby_name, resource_name, a[2])
             ),
+            opts=child,
+        )
+
+        function_logs = aws.cloudwatch.LogGroup(
+            "failover-logs",
+            name=f"/aws/lambda/{resource_name}-failover",
+            retention_in_days=14,
+            tags=tags,
             opts=child,
         )
 
@@ -288,7 +250,7 @@ class Failover(pulumi.ComponentResource):
                 }
             },
             tags=tags,
-            opts=child,
+            opts=pulumi.ResourceOptions(parent=self, depends_on=[function_logs]),
         )
         aws.lambda_.FunctionEventInvokeConfig(
             "failover-invoke-config",
@@ -361,11 +323,9 @@ class Failover(pulumi.ComponentResource):
 
         self.topic_arn = self.alerts.arn
         self.function_name = self.function.name
-        self.event_log_group = self.event_log.name
         self.register_outputs(
             {
                 "topic_arn": self.topic_arn,
                 "function_name": self.function_name,
-                "event_log_group": self.event_log_group,
             }
         )
