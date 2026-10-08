@@ -112,6 +112,7 @@ class NetBirdService(pulumi.ComponentResource):
             desired_count=1,
             deployment_minimum_healthy_percent=0,
             deployment_maximum_percent=100,
+            deployment_circuit_breaker={"enable": True, "rollback": True},
             launch_type="EC2",
             wait_for_steady_state=True,
             tags=tags,
