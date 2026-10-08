@@ -44,8 +44,14 @@ def _log_delivery_policy(log_group_arn: str) -> str:
     )
 
 
-def _lambda_policy(cluster_arn: str, topic_arn: str, standby_name: str, service_name: str) -> str:
+def _lambda_policy(
+    cluster_arn: str, topic_arn: str, standby_name: str, service_name: str, asg_name: str
+) -> str:
     service_arn = f"{cluster_arn.replace(':cluster/', ':service/')}/{service_name}"
+    region, account = cluster_arn.split(":")[3:5]
+    asg_arn = (
+        f"arn:aws:autoscaling:{region}:{account}:autoScalingGroup:*:autoScalingGroupName/{asg_name}"
+    )
     return json.dumps(
         {
             "Version": "2012-10-17",
@@ -93,6 +99,7 @@ def _lambda_policy(cluster_arn: str, topic_arn: str, standby_name: str, service_
                     "Action": "autoscaling:DescribeAutoScalingGroups",
                     "Resource": "*",
                 },
+                {"Effect": "Allow", "Action": "autoscaling:SetInstanceHealth", "Resource": asg_arn},
                 {"Effect": "Allow", "Action": "sns:Publish", "Resource": topic_arn},
             ],
         }
@@ -115,17 +122,25 @@ def _alarm_events_pattern(alarm_names: list[str]) -> str:
     )
 
 
-def _task_events_pattern(cluster_arn: str, service_name: str) -> str:
+def _ecs_events_pattern(cluster_arn: str, service_name: str) -> str:
     return json.dumps(
         {
             "source": ["aws.ecs"],
-            "detail-type": ["ECS Task State Change"],
-            "detail": {
-                "clusterArn": [cluster_arn],
-                "group": [f"service:{service_name}"],
-                "lastStatus": ["RUNNING"],
-                "desiredStatus": ["RUNNING"],
-            },
+            "$or": [
+                {
+                    "detail-type": ["ECS Task State Change"],
+                    "detail": {
+                        "clusterArn": [cluster_arn],
+                        "group": [f"service:{service_name}"],
+                        "lastStatus": ["RUNNING"],
+                        "desiredStatus": ["RUNNING"],
+                    },
+                },
+                {
+                    "detail-type": ["ECS Container Instance State Change"],
+                    "detail": {"clusterArn": [cluster_arn], "status": ["DRAINING"]},
+                },
+            ],
         }
     )
 
@@ -239,8 +254,8 @@ class Failover(pulumi.ComponentResource):
         aws.iam.RolePolicy(
             "failover-lambda-policy",
             role=role.name,
-            policy=pulumi.Output.all(cluster.arn, self.alerts.arn).apply(
-                lambda a: _lambda_policy(a[0], a[1], standby_name, resource_name)
+            policy=pulumi.Output.all(cluster.arn, self.alerts.arn, asg_name).apply(
+                lambda a: _lambda_policy(a[0], a[1], standby_name, resource_name, a[2])
             ),
             opts=child,
         )
@@ -298,8 +313,8 @@ class Failover(pulumi.ComponentResource):
         task_events = aws.cloudwatch.EventRule(
             "task-events",
             name=f"{resource_name}-task-events",
-            description="a task of this service reaching RUNNING",
-            event_pattern=cluster.arn.apply(lambda arn: _task_events_pattern(arn, resource_name)),
+            description="a task of this service reaching RUNNING, or a container instance draining",
+            event_pattern=cluster.arn.apply(lambda arn: _ecs_events_pattern(arn, resource_name)),
             tags=tags,
             opts=child,
         )

@@ -247,6 +247,21 @@ def launch_failed(event, context):
     return fail_over(context, check_health=False)
 
 
+def primary_draining(event):
+    instance_id = event.get("detail", {}).get("ec2InstanceId")
+    if not instance_id:
+        return "the event names no instance, nothing to do"
+    if instance_id not in in_service(group()):
+        return f"{instance_id} is not in service in the group, nothing to do"
+    host = container_instances().get(instance_id)
+    if not host or host["status"] != "DRAINING":
+        return f"{instance_id} is no longer draining, nothing to do"
+    autoscaling.set_instance_health(
+        InstanceId=instance_id, HealthStatus="Unhealthy", ShouldRespectGracePeriod=False
+    )
+    return f"{instance_id} is draining while in service, asked the group to replace it"
+
+
 def primary_ready(instance_id):
     if instance_id not in in_service(group()):
         return False
@@ -347,6 +362,10 @@ def handler(event, context):
         outcome = place_eip(event)
         log.info("eip: %s", outcome)
         return {"action": "eip", "outcome": outcome}
+
+    if kind == "ECS Container Instance State Change":
+        log.info("%s is draining", event.get("detail", {}).get("ec2InstanceId"))
+        return run("replace", lambda: primary_draining(event))
 
     if kind == "EC2 Instance Launch Unsuccessful":
         log.info("the group could not launch an instance")
