@@ -5,7 +5,7 @@ DASHBOARD_HEALTH_SERVER = (
 DASHBOARD_PROBE = "curl -m 3 -fsS -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/"
 SERVER_PROBE = """
 req='GET /oauth2/.well-known/openid-configuration HTTP/1.0\\r\\nHost: __SERVER__\\r\\n\\r\\n'
-line=$(printf '%b' "$req" | timeout 3 openssl s_client -quiet -connect 127.0.0.1:443 \\
+line=$(printf '%b' "$req" | timeout -k 1 3 openssl s_client -quiet -connect 127.0.0.1:443 \\
   -servername __SERVER__ 2>/dev/null | head -1 | tr -d '\\r')
 echo "${line:-no response}"
 case "$line" in *" 200 "*) return 0 ;; esac
@@ -16,21 +16,34 @@ SERVER_ENTRY = """
 probe() {
 __PROBE__
 }
-stop=0
-trap 'stop=1' TERM
+stopping=0
+trap 'stopping=1' TERM
 /go/bin/netbird-server --config /etc/netbird/config.yaml &
-pid=$!
-wait "$pid"
-status=$?
-if [ "$stop" = 1 ]; then
-  if probe > /dev/null; then
-    echo "stop requested while healthy, serving __HOLD__s more before stopping"
-    sleep __HOLD__
+server=$!
+timer=
+status=
+next() {
+  finished=
+  wait -n -p finished "$@"
+  code=$?
+  if [ "$finished" = "$server" ]; then
+    status=$code
+  elif [ -n "$finished" ] && [ "$finished" = "$timer" ]; then
+    timer=
+  elif [ -z "$finished" ] && [ "$code" = 127 ]; then
+    status=${status:-127}
   fi
-  kill -TERM "$pid"
-  wait "$pid"
-  status=$?
+}
+while [ -z "$status" ] && [ "$stopping" = 0 ]; do next "$server"; done
+if [ -z "$status" ] && probe > /dev/null; then
+  echo "stop requested while healthy, serving __HOLD__s more before stopping"
+  sleep __HOLD__ &
+  timer=$!
+  while [ -z "$status" ] && [ -n "$timer" ]; do next "$server" "$timer"; done
+  [ -n "$timer" ] && kill "$timer" 2> /dev/null
 fi
+[ -z "$status" ] && kill -TERM "$server" 2> /dev/null
+while [ -z "$status" ]; do next "$server"; done
 exit "$status"
 """
 STUN_PROBE = """
@@ -39,7 +52,7 @@ echo "relay health endpoint failed"
 return 1
 """
 LITESTREAM_PROBE = """
-m=$(timeout 3 bash -c 'exec 3<>/dev/tcp/127.0.0.1/9090 \\
+m=$(timeout -k 1 3 bash -c 'exec 3<>/dev/tcp/127.0.0.1/9090 \\
   && printf "GET /metrics HTTP/1.0\\r\\n\\r\\n" >&3 && cat <&3' 2>/dev/null) \\
   || { echo "metrics unreachable"; return 1; }
 cur=$(awk '/^litestream_sync_count[{ ]/ {s += $NF}
@@ -228,7 +241,7 @@ def container_definitions(
                 "bash", LITESTREAM_PROBE, interval=10, retries=3, start_period=60
             ),
             "restartPolicy": {"enabled": True, "restartAttemptPeriod": 300},
-            "stopTimeout": 20,
+            "stopTimeout": 15,
             "dependsOn": [
                 {"containerName": f"restore-{db}", "condition": "SUCCESS"} for db in DATABASES
             ],
@@ -259,7 +272,7 @@ def container_definitions(
                     "__HOLD__", str(SERVER_HOLD)
                 )
             ],
-            "stopTimeout": SERVER_HOLD + 10,
+            "stopTimeout": SERVER_HOLD + 7,
             "environment": [{"name": "AWS_REGION", "value": region}],
             "dependsOn": [
                 {"containerName": "litestream", "condition": "START"},
