@@ -11,6 +11,28 @@ echo "${line:-no response}"
 case "$line" in *" 200 "*) return 0 ;; esac
 return 1
 """
+SERVER_HOLD = 75
+SERVER_ENTRY = """
+probe() {
+__PROBE__
+}
+stop=0
+trap 'stop=1' TERM
+/go/bin/netbird-server --config /etc/netbird/config.yaml &
+pid=$!
+wait "$pid"
+status=$?
+if [ "$stop" = 1 ]; then
+  if probe > /dev/null; then
+    echo "stop requested while healthy, serving __HOLD__s more before stopping"
+    sleep __HOLD__
+  fi
+  kill -TERM "$pid"
+  wait "$pid"
+  status=$?
+fi
+exit "$status"
+"""
 STUN_PROBE = """
 wget -q -T 3 -O /dev/null http://127.0.0.1:9000/health && return 0
 echo "relay health endpoint failed"
@@ -133,6 +155,7 @@ def container_definitions(
             "readOnly": True,
         },
     ]
+    server_probe = SERVER_PROBE.replace("__SERVER__", server_name)
 
     return [
         {
@@ -229,7 +252,13 @@ def container_definitions(
             "image": server_image,
             "essential": True,
             "memoryReservation": 768,
-            "command": ["--config", "/etc/netbird/config.yaml"],
+            "entryPoint": ["bash", "-c"],
+            "command": [
+                SERVER_ENTRY.replace("__PROBE__", server_probe.strip()).replace(
+                    "__HOLD__", str(SERVER_HOLD)
+                )
+            ],
+            "stopTimeout": SERVER_HOLD + 10,
             "environment": [{"name": "AWS_REGION", "value": region}],
             "dependsOn": [
                 {"containerName": "litestream", "condition": "START"},
@@ -238,7 +267,7 @@ def container_definitions(
             "portMappings": [{"containerPort": 443, "hostPort": 443, "protocol": "tcp"}],
             "healthCheck": health_check(
                 "bash",
-                SERVER_PROBE.replace("__SERVER__", server_name),
+                server_probe,
                 interval=5,
                 retries=2,
                 start_period=300,
