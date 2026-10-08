@@ -7,6 +7,7 @@ CLUSTER=__CLUSTER__
 SERVICE=__SERVICE__
 ROLE=__ROLE__
 NB_DIR=__NB_DIR__
+IMAGES="__IMAGES__"
 
 cat > /usr/local/bin/netbird-prepare <<PREPARE
 #!/bin/bash
@@ -199,6 +200,39 @@ TimeoutStartSec=600
 WantedBy=multi-user.target
 UNIT
 
+cat > /usr/local/bin/netbird-prepull <<PREPULL
+#!/bin/bash
+set -uo pipefail
+IMAGES="${IMAGES}"
+PREPULL
+
+cat >> /usr/local/bin/netbird-prepull <<'PREPULL'
+pull() {
+  local n=0
+  until docker pull --quiet "$1"; do
+    n=$((n + 1))
+    [ "$n" -ge 3 ] && return 1
+    sleep $((n * 5))
+  done
+}
+for image in $IMAGES; do pull "$image" & done
+wait
+PREPULL
+chmod +x /usr/local/bin/netbird-prepull
+
+cat > /etc/systemd/system/netbird-prepull.service <<'UNIT'
+[Unit]
+Description=Pull the task images ahead of time so a replacement task does not wait for them
+Wants=network-online.target
+After=docker.service network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/netbird-prepull
+TimeoutStartSec=600
+UNIT
+
 install -d /etc/systemd/system/ecs.service.d
 cat > /etc/systemd/system/ecs.service.d/after-prepare.conf <<'UNIT'
 [Unit]
@@ -207,6 +241,7 @@ Requires=netbird-prepare.service
 UNIT
 
 grep -q "^ECS_CLUSTER=" /etc/ecs/ecs.config 2>/dev/null || echo "ECS_CLUSTER=${CLUSTER}" >> /etc/ecs/ecs.config
+grep -q "^ECS_IMAGE_PULL_BEHAVIOR=" /etc/ecs/ecs.config || echo "ECS_IMAGE_PULL_BEHAVIOR=prefer-cached" >> /etc/ecs/ecs.config
 
 systemctl daemon-reload
 systemctl enable netbird-prepare.service
@@ -217,10 +252,12 @@ systemctl start netbird-prepare.service
 if [ "$ROLE" = "primary" ]; then
   systemctl enable netbird-kick.service
   systemctl start --no-block netbird-kick.service
+  systemctl start --no-block netbird-prepull.service
 fi
 
 if [ "$ROLE" = "standby" ]; then
   systemctl mask --runtime ecs.service
   systemctl stop ecs.service
+  systemctl start netbird-prepull.service || true
   shutdown -h +1
 fi

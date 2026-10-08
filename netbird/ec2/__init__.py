@@ -18,6 +18,7 @@ def render_user_data(
     cluster_name: str,
     service_name: str,
     nb_dir: str,
+    images: Sequence[str],
 ) -> pulumi.Output[str]:
     return pulumi.Output.from_input(bucket).apply(
         lambda b: (
@@ -27,6 +28,7 @@ def render_user_data(
             .replace("__SERVICE__", service_name)
             .replace("__ROLE__", role)
             .replace("__NB_DIR__", nb_dir)
+            .replace("__IMAGES__", " ".join(images))
         )
     )
 

@@ -164,6 +164,7 @@ def user_data(role: str) -> pulumi.Output[str]:
         cluster_name=NAME,
         service_name=NAME,
         nb_dir=NB_DIR,
+        images=[LITESTREAM_IMAGE, DASHBOARD_IMAGE, SERVER_IMAGE, STUN_IMAGE, AWS_CLI_IMAGE],
     )
 
 
