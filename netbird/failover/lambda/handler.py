@@ -191,8 +191,8 @@ def kick_service():
     return "the service had no task, asked ECS to place it now"
 
 
-def fail_over(context):
-    if healthy():
+def fail_over(context, check_health=True):
+    if check_health and healthy():
         return f"{DOMAIN} still answers, nothing to do"
     instance_id, state = standby_instance()
     if instance_id is None:
@@ -242,7 +242,9 @@ def launch_failed(event, context):
         return f"desired capacity is {asg['DesiredCapacity']}, nothing to do"
     if in_service(asg):
         return f"{in_service(asg)[0]} is in service, nothing to do"
-    return fail_over(context)
+    if task_on_standby():
+        return "the task already runs on the standby, nothing to do"
+    return fail_over(context, check_health=False)
 
 
 def primary_ready(instance_id):
