@@ -227,7 +227,7 @@ def container_definitions(
                 "bash", LITESTREAM_PROBE, interval=10, retries=3, start_period=60
             ),
             "restartPolicy": {"enabled": True, "restartAttemptPeriod": 300},
-            "stopTimeout": 60,
+            "stopTimeout": 20,
             "dependsOn": [
                 {"containerName": f"restore-{db}", "condition": "SUCCESS"} for db in DATABASES
             ],
