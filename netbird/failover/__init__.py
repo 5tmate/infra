@@ -7,7 +7,7 @@ import pulumi_aws as aws
 import policies
 
 LAMBDA_SOURCE = Path(__file__).parent / "lambda"
-EVENT_RETRY = {"maximum_event_age_in_seconds": 900, "maximum_retry_attempts": 1}
+EVENT_RETRY = {"maximum_event_age_in_seconds": 900, "maximum_retry_attempts": 2}
 
 
 def _publish_policy(topic_arn: str) -> str:

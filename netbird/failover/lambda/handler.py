@@ -20,6 +20,7 @@ TOPIC_ARN = os.environ["TOPIC_ARN"]
 FAILOVER_EVENT_MAX_AGE = 300
 PRIMARY_JOIN_BUDGET = 120
 FAILBACK_SOAK = 180
+FAILBACK_GIVE_UP = 420
 DISCONNECT_RECHECK = 10
 
 log = logging.getLogger()
@@ -101,6 +102,12 @@ def running_task_host():
         if task["lastStatus"] == "RUNNING":
             return task.get("containerInstanceArn")
     return None
+
+
+def instance_of(container_instance_arn):
+    return ecs.describe_container_instances(
+        cluster=CLUSTER, containerInstances=[container_instance_arn]
+    )["containerInstances"][0]["ec2InstanceId"]
 
 
 def wait_task_on(context, wanted, budget, equal=True):
@@ -199,10 +206,10 @@ def fail_over(context, check_health=True):
     if instance_id is None:
         raise Failed(f"no instance tagged {STANDBY_NAME}")
 
+    existing = container_instances().get(instance_id)
+    if existing and existing["status"] == "DRAINING":
+        set_state(existing["containerInstanceArn"], "ACTIVE")
     if state not in ("pending", "running"):
-        existing = container_instances().get(instance_id)
-        if existing and existing["status"] == "DRAINING":
-            set_state(existing["containerInstanceArn"], "ACTIVE")
         log.info("starting standby %s", instance_id)
         ec2.start_instances(InstanceIds=[instance_id])
 
@@ -301,17 +308,41 @@ def task_on_standby():
     return bool(standby) and running_task_host() == standby["containerInstanceArn"]
 
 
+def stop_idle_standby():
+    instance_id, state = standby_instance()
+    if state != "running":
+        return None
+    standby = container_instances().get(instance_id)
+    host = running_task_host()
+    if not host or (standby and host == standby["containerInstanceArn"]):
+        return None
+    ec2.stop_instances(InstanceIds=[instance_id])
+    return instance_id
+
+
+def give_up_on(event, primary_id, why):
+    if primary_id not in in_service(group()):
+        return f"{primary_id} {why} and left the group, nothing to do"
+    if event_age(event) < FAILBACK_GIVE_UP:
+        raise Failed(f"{primary_id} {why}, trying again")
+    mark_unhealthy(primary_id)
+    return f"{primary_id} {why} on every try, asked the group to replace it"
+
+
 def launch_succeeded(event, context):
     primary_id = event.get("detail", {}).get("EC2InstanceId")
     if not primary_id:
         return "the launch names no instance, nothing to do"
     if not task_on_standby():
+        idle = stop_idle_standby()
+        if idle:
+            return f"the task already runs elsewhere, stopped the idle standby {idle}"
         return "the task is not on the standby, nothing to do"
 
     deadline = time.time() + PRIMARY_JOIN_BUDGET
     while not primary_ready(primary_id):
         if time.time() > deadline:
-            return f"{primary_id} never joined the cluster, staying on the standby"
+            return give_up_on(event, primary_id, "never joined the cluster")
         log.info("waiting for %s to join the cluster", primary_id)
         time.sleep(20)
 
@@ -319,7 +350,7 @@ def launch_succeeded(event, context):
     while time.time() - ready_since < FAILBACK_SOAK:
         time.sleep(20)
         if not primary_ready(primary_id):
-            return f"{primary_id} stopped being ready, staying on the standby"
+            return give_up_on(event, primary_id, "stopped being ready")
     log.info("%s stayed ready for %ds", primary_id, FAILBACK_SOAK)
     return fail_back(context, primary_id)
 
@@ -345,10 +376,10 @@ def fail_back(context, primary_id):
     set_state(standby_arn, "DRAINING")
 
     try:
-        wait_task_on(context, standby_arn, budget=300, equal=False)
-        claim_eip(primary_id)
+        target = instance_of(wait_task_on(context, standby_arn, budget=300, equal=False))
+        claim_eip(target)
         if not wait_healthy(context, budget=180):
-            raise Failed(f"the task moved to {primary_id} but {DOMAIN} is silent")
+            raise Failed(f"the task moved to {target} but {DOMAIN} is silent")
     except Failed as e:
         log.error("handing back failed, pushing the task onto the standby again: %s", e)
         set_state(standby_arn, "ACTIVE")
@@ -362,7 +393,7 @@ def fail_back(context, primary_id):
 
     log.info("stopping standby %s", instance_id)
     ec2.stop_instances(InstanceIds=[instance_id])
-    return f"handed back to {primary_id}, standby {instance_id} stopping"
+    return f"handed back to {target}, standby {instance_id} stopping"
 
 
 def run(action, step):
