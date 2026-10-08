@@ -23,4 +23,5 @@ ec2/                   SpotHost、render_user_data、user_data.sh
 failover/              Failover、lambda/handler.py
 ecs/                   NetBirdService、containers.py
 cloudfront/            Cdn
+experiments/           切換實驗的腳本
 ```
