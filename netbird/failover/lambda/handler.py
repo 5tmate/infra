@@ -1,8 +1,8 @@
+import json
 import logging
 import os
 import ssl
 import time
-import urllib.error
 import urllib.request
 from datetime import UTC, datetime
 
@@ -15,252 +15,156 @@ STANDBY_NAME = os.environ["STANDBY_NAME"]
 EIP_ALLOC = os.environ["EIP_ALLOC"]
 DOMAIN = os.environ["DOMAIN"]
 HEALTH_URL = os.environ["HEALTH_URL"]
-NO_CAPACITY_ALARM = os.environ["NO_CAPACITY_ALARM"]
-TOPIC_ARN = os.environ["TOPIC_ARN"]
-FAILOVER_EVENT_MAX_AGE = 300
-PRIMARY_JOIN_BUDGET = 120
-FAILBACK_SOAK = 180
-FAILBACK_GIVE_UP = 420
-DISCONNECT_RECHECK = 10
+SKIP_HOLD_PATH = os.environ["SKIP_HOLD_PATH"]
+POLL = 10
+PRIMARY_READY_LIMIT = 420
+HANDOFF_RESERVE = 90
+MAX_HANDOFFS = 3
+FAILED_STOPS = ("TaskFailedToStart", "EssentialContainerExited")
 
 log = logging.getLogger()
 log.setLevel(logging.INFO)
 
 ecs = boto3.client("ecs")
 ec2 = boto3.client("ec2")
-sns = boto3.client("sns")
+ssm = boto3.client("ssm")
 autoscaling = boto3.client("autoscaling")
+functions = boto3.client("lambda")
+
+once = set()
 
 
-class Failed(Exception):
-    pass
-
-
-def notify(subject, body):
-    sns.publish(TopicArn=TOPIC_ARN, Subject=subject[:100], Message=body)
-
-
-def remaining(context):
-    return context.get_remaining_time_in_millis() / 1000.0
-
-
-def event_age(event):
-    sent = datetime.fromisoformat(event["time"].replace("Z", "+00:00"))
-    return (datetime.now(UTC) - sent).total_seconds()
-
-
-def group():
-    return autoscaling.describe_auto_scaling_groups(AutoScalingGroupNames=[ASG_NAME])[
-        "AutoScalingGroups"
-    ][0]
-
-
-def in_service(asg):
-    return [i["InstanceId"] for i in asg["Instances"] if i["LifecycleState"] == "InService"]
-
-
-def standby_instance():
-    pages = ec2.get_paginator("describe_instances").paginate(
-        Filters=[
-            {"Name": "tag:Name", "Values": [STANDBY_NAME]},
-            {
-                "Name": "instance-state-name",
-                "Values": ["pending", "running", "stopping", "stopped"],
-            },
-        ]
-    )
-    for page in pages:
-        for reservation in page["Reservations"]:
-            for instance in reservation["Instances"]:
-                return instance["InstanceId"], instance["State"]["Name"]
-    return None, None
-
-
-def container_instances():
-    arns = ecs.list_container_instances(cluster=CLUSTER, status="ACTIVE")["containerInstanceArns"]
-    arns += ecs.list_container_instances(cluster=CLUSTER, status="DRAINING")[
-        "containerInstanceArns"
-    ]
-    if not arns:
-        return {}
-    described = ecs.describe_container_instances(cluster=CLUSTER, containerInstances=arns)[
-        "containerInstances"
-    ]
-    return {c["ec2InstanceId"]: c for c in described}
-
-
-def usable(container_instance):
-    return container_instance["status"] == "ACTIVE" and container_instance.get("agentConnected")
-
-
-def running_task_host():
-    arns = ecs.list_tasks(cluster=CLUSTER, serviceName=SERVICE, desiredStatus="RUNNING")["taskArns"]
-    if not arns:
-        return None
-    tasks = ecs.describe_tasks(cluster=CLUSTER, tasks=arns)["tasks"]
-    for task in tasks:
-        if task["lastStatus"] == "RUNNING":
-            return task.get("containerInstanceArn")
-    return None
-
-
-def instance_of(container_instance_arn):
-    return ecs.describe_container_instances(
-        cluster=CLUSTER, containerInstances=[container_instance_arn]
-    )["containerInstances"][0]["ec2InstanceId"]
-
-
-def wait_task_on(context, wanted, budget, equal=True):
-    deadline = time.time() + min(budget, remaining(context) - 60)
-    while time.time() < deadline:
-        host = running_task_host()
-        if host and ((host == wanted) if equal else (host != wanted)):
-            log.info("the task is running on %s", host)
-            return host
-        log.info("the task is on %s, waiting", host)
-        time.sleep(10)
-    raise Failed("the service never placed a running task where it was needed")
-
-
-def eip_holder():
-    addresses = ec2.describe_addresses(AllocationIds=[EIP_ALLOC])["Addresses"]
-    return addresses[0].get("InstanceId") if addresses else None
-
-
-def claim_eip(instance_id):
-    log.info("moving the elastic ip to %s", instance_id)
-    ec2.associate_address(AllocationId=EIP_ALLOC, InstanceId=instance_id, AllowReassociation=True)
+def ago(moment):
+    return (datetime.now(UTC) - moment).total_seconds()
 
 
 def healthy():
     try:
-        with urllib.request.urlopen(
-            HEALTH_URL, timeout=10, context=ssl.create_default_context()
-        ) as r:
-            return 200 <= r.status < 300
-    except urllib.error.HTTPError as e:
-        return 200 <= e.code < 300
+        with urllib.request.urlopen(HEALTH_URL, timeout=10, context=ssl.create_default_context()):
+            return True
     except Exception:
         return False
 
 
-def wait_healthy(context, budget):
-    deadline = time.time() + min(budget, remaining(context) - 45)
-    started = time.time()
-    while time.time() < deadline:
-        if healthy():
-            log.info("%s answered after %ds", DOMAIN, time.time() - started)
-            return True
-        time.sleep(10)
-    log.error("%s never answered", DOMAIN)
-    return False
+def find_instances(filters):
+    reservations = ec2.describe_instances(Filters=filters)["Reservations"]
+    return {i["InstanceId"]: i for r in reservations for i in r["Instances"]}
 
 
-def set_state(container_instance_arn, state):
-    log.info("setting %s to %s", container_instance_arn, state)
-    ecs.update_container_instances_state(
-        cluster=CLUSTER, containerInstances=[container_instance_arn], status=state
-    )
+def listed(operation, key, statuses, **params):
+    arns = []
+    for status in statuses:
+        pages = ecs.get_paginator(operation).paginate(cluster=CLUSTER, **params, **status)
+        arns += [arn for page in pages for arn in page[key]]
+    arns = list(dict.fromkeys(arns))
+    return [arns[i : i + 100] for i in range(0, len(arns), 100)]
 
 
-def place_eip(event):
-    detail = event.get("detail", {})
-    arn = detail.get("containerInstanceArn")
-    if not arn:
-        return "the event carries no container instance, nothing to do"
-    if detail.get("desiredStatus") != "RUNNING":
-        return f"the task is meant to be {detail.get('desiredStatus')}, nothing to do"
-    if running_task_host() != arn:
-        return f"the service's running task is not on {arn}, nothing to do"
-
-    hosts = ecs.describe_container_instances(cluster=CLUSTER, containerInstances=[arn])[
-        "containerInstances"
-    ]
-    if not hosts:
-        return f"{arn} is no longer in the cluster, nothing to do"
-
-    instance_id = hosts[0]["ec2InstanceId"]
-    reservations = ec2.describe_instances(InstanceIds=[instance_id])["Reservations"]
-    state = reservations[0]["Instances"][0]["State"]["Name"] if reservations else "gone"
-    if state != "running":
-        return f"{instance_id} is {state}, nothing to do"
-    if eip_holder() == instance_id:
-        return f"the elastic ip is already on {instance_id}, nothing to do"
-
-    claim_eip(instance_id)
-    return f"moved the elastic ip to {instance_id}"
+def container_instances():
+    statuses = [{"status": "ACTIVE"}, {"status": "DRAINING"}]
+    batches = listed("list_container_instances", "containerInstanceArns", statuses)
+    return {
+        c["ec2InstanceId"]: c
+        for batch in batches
+        for c in ecs.describe_container_instances(cluster=CLUSTER, containerInstances=batch)[
+            "containerInstances"
+        ]
+    }
 
 
-def kick_service():
-    service = ecs.describe_services(cluster=CLUSTER, services=[SERVICE])["services"][0]
-    if service["runningCount"] or service["pendingCount"]:
-        return "the service already has a task, nothing to do"
-    ecs.update_service(cluster=CLUSTER, service=SERVICE, desiredCount=service["desiredCount"])
-    return "the service had no task, asked ECS to place it now"
+def service_tasks():
+    statuses = [{"desiredStatus": "RUNNING"}, {"desiredStatus": "STOPPED"}]
+    batches = listed("list_tasks", "taskArns", statuses, serviceName=SERVICE)
+    return [t for b in batches for t in ecs.describe_tasks(cluster=CLUSTER, tasks=b)["tasks"]]
 
 
-def fail_over(context, check_health=True):
-    if check_health and healthy():
-        return f"{DOMAIN} still answers, nothing to do"
-    instance_id, state = standby_instance()
-    if instance_id is None:
-        raise Failed(f"no instance tagged {STANDBY_NAME}")
-
-    existing = container_instances().get(instance_id)
-    if existing and existing["status"] == "DRAINING":
-        set_state(existing["containerInstanceArn"], "ACTIVE")
-    if state not in ("pending", "running"):
-        log.info("starting standby %s", instance_id)
-        ec2.start_instances(InstanceIds=[instance_id])
-
-    ec2.get_waiter("instance_running").wait(
-        InstanceIds=[instance_id], WaiterConfig={"Delay": 10, "MaxAttempts": 30}
-    )
-
-    deadline = time.time() + min(300, remaining(context) - 240)
-    arn = None
-    while time.time() < deadline:
-        found = container_instances().get(instance_id)
-        if found and usable(found):
-            arn = found["containerInstanceArn"]
+def nowhere_left(zones):
+    tried = []
+    activities = autoscaling.describe_scaling_activities(AutoScalingGroupName=ASG_NAME)
+    for activity in activities["Activities"]:
+        if not activity["Description"].startswith("Launching"):
+            continue
+        if activity["StatusCode"] not in ("Failed", "Cancelled"):
             break
-        log.info("standby %s has not reconnected to the cluster yet", instance_id)
-        time.sleep(10)
-    if not arn:
-        raise Failed(f"standby {instance_id} never joined the cluster")
-
-    if running_task_host() != arn:
-        log.info("deploy: %s", kick_service())
-        wait_task_on(context, arn, budget=300)
-
-    if eip_holder() != instance_id:
-        claim_eip(instance_id)
-
-    if not wait_healthy(context, budget=180):
-        raise Failed(f"the task runs on standby {instance_id} but {DOMAIN} is silent")
-    return f"switched to standby {instance_id}"
+        tried.append(json.loads(activity.get("Details") or "{}").get("Availability Zone"))
+    repeated = len(tried) > len(set(tried))
+    return bool(tried) and (None in tried or repeated or set(zones) <= set(tried))
 
 
-def launch_failed(event, context):
-    age = event_age(event)
-    if age > FAILOVER_EVENT_MAX_AGE:
-        return f"the failed launch is {age:.0f}s old, nothing to do"
-    asg = group()
-    if asg["DesiredCapacity"] != 1:
-        return f"desired capacity is {asg['DesiredCapacity']}, nothing to do"
-    if in_service(asg):
-        return f"{in_service(asg)[0]} is in service, nothing to do"
-    if task_on_standby():
-        return "the task already runs on the standby, nothing to do"
-    return fail_over(context, check_health=False)
+class State:
+    def __init__(self):
+        asg = autoscaling.describe_auto_scaling_groups(AutoScalingGroupNames=[ASG_NAME])[
+            "AutoScalingGroups"
+        ][0]
+        self.zones = asg["AvailabilityZones"]
+        self.primaries = {i["InstanceId"]: i["LifecycleState"] for i in asg["Instances"]}
+        self.hosts = container_instances()
+        ids = sorted(set(self.primaries) | set(self.hosts))
+        self.instances = find_instances([{"Name": "instance-id", "Values": ids}]) if ids else {}
+        standby = find_instances(
+            [
+                {"Name": "tag:Name", "Values": [STANDBY_NAME]},
+                {
+                    "Name": "instance-state-name",
+                    "Values": ["pending", "running", "stopping", "stopped"],
+                },
+            ]
+        )
+        self.instances.update(standby)
+        newest = sorted(standby.values(), key=lambda i: i["LaunchTime"], reverse=True)
+        self.standby = newest[0]["InstanceId"] if newest else None
+        addresses = ec2.describe_addresses(AllocationIds=[EIP_ALLOC])["Addresses"]
+        self.eip = addresses[0].get("InstanceId") if addresses else None
+        by_arn = {c["containerInstanceArn"]: i for i, c in self.hosts.items()}
+        self.tasks = service_tasks()
+        for task in self.tasks:
+            task["host"] = by_arn.get(task.get("containerInstanceArn"))
+        self.running = [t for t in self.tasks if t["lastStatus"] == "RUNNING"]
+        self.active = [t for t in self.tasks if t["lastStatus"] != "STOPPED"]
+        only = self.running[0] if len(self.running) == 1 else None
+        serving = only and only["desiredStatus"] == "RUNNING" and self.usable(only["host"])
+        self.serving = only["host"] if serving else None
+        self.ready = next(
+            (i for i, v in self.primaries.items() if v == "InService" and self.usable(i)), None
+        )
+        self.coming = any(
+            v == "InService" or v.startswith("Pending") for v in self.primaries.values()
+        )
+        self.health = None
+
+    def state(self, instance_id):
+        return self.instances.get(instance_id, {}).get("State", {}).get("Name", "gone")
+
+    def age(self, instance_id):
+        launched = self.instances.get(instance_id, {}).get("LaunchTime")
+        return ago(launched) if launched else 0
+
+    def usable(self, instance_id):
+        host = self.hosts.get(instance_id, {})
+        return (
+            host.get("status") == "ACTIVE"
+            and bool(host.get("agentConnected"))
+            and self.state(instance_id) == "running"
+        )
+
+    def in_group(self, instance_id):
+        tags = self.instances.get(instance_id, {}).get("Tags", [])
+        return {"Key": "aws:autoscaling:groupName", "Value": ASG_NAME} in tags
+
+    def task_on(self, instance_id):
+        return next((t for t in self.active if t["host"] == instance_id), None)
+
+    def answers(self):
+        if self.health is None:
+            self.health = healthy()
+        return self.health
 
 
-def agent_gone(instance_id):
-    if healthy():
-        return False
-    time.sleep(DISCONNECT_RECHECK)
-    host = container_instances().get(instance_id)
-    return bool(host) and not host.get("agentConnected") and not healthy()
+def set_state(host, status):
+    log.info("setting %s to %s", host["ec2InstanceId"], status)
+    ecs.update_container_instances_state(
+        cluster=CLUSTER, containerInstances=[host["containerInstanceArn"]], status=status
+    )
 
 
 def mark_unhealthy(instance_id):
@@ -269,182 +173,188 @@ def mark_unhealthy(instance_id):
     )
 
 
-def replace_primary(event):
-    instance_id = event.get("detail", {}).get("ec2InstanceId")
-    if not instance_id:
-        return "the event names no instance, nothing to do"
-    if instance_id not in in_service(group()):
-        return f"{instance_id} is not in service in the group, nothing to do"
+def agent_gone(instance_id):
+    if healthy():
+        return False
+    time.sleep(POLL)
     host = container_instances().get(instance_id)
-    if not host:
-        return f"{instance_id} is not in the cluster, nothing to do"
-    if host["status"] == "DRAINING":
-        mark_unhealthy(instance_id)
-        return f"{instance_id} is draining while in service, asked the group to replace it"
-    if host.get("agentConnected") or not agent_gone(instance_id):
-        return f"{instance_id} is neither draining nor down, nothing to do"
-    mark_unhealthy(instance_id)
+    return bool(host) and not host.get("agentConnected") and not healthy()
+
+
+def hand_back(s, task):
+    if task["taskArn"] not in once:
+        once.add(task["taskArn"])
+        try:
+            command = ssm.send_command(
+                InstanceIds=[s.standby],
+                DocumentName="AWS-RunShellScript",
+                Parameters={"commands": [f"touch {SKIP_HOLD_PATH}"]},
+            )["Command"]["CommandId"]
+            ssm.get_waiter("command_executed").wait(
+                CommandId=command,
+                InstanceId=s.standby,
+                WaiterConfig={"Delay": 2, "MaxAttempts": 15},
+            )
+        except Exception:
+            log.exception("the standby did not confirm the skip-hold marker")
+    set_state(s.hosts[s.standby], "DRAINING")
+    ecs.stop_task(cluster=CLUSTER, task=task["taskArn"], reason="failback to the primary")
+
+
+def deregister(host):
     ecs.deregister_container_instance(
         cluster=CLUSTER, containerInstance=host["containerInstanceArn"], force=True
     )
-    return (
-        f"{instance_id} lost its ECS agent and {DOMAIN} is silent, "
-        "asked the group to replace it and deregistered it so its task stops"
+
+
+def replace_primary(s):
+    for instance_id, host in s.hosts.items():
+        state = s.state(instance_id)
+        if instance_id != s.standby and state in ("shutting-down", "terminated", "gone"):
+            deregister(host)
+            return f"removed {instance_id} from the cluster, its instance is {state}"
+        if s.in_group(instance_id) and not host.get("agentConnected") and agent_gone(instance_id):
+            if s.primaries.get(instance_id) == "InService":
+                mark_unhealthy(instance_id)
+            ec2.terminate_instances(InstanceIds=[instance_id])
+            deregister(host)
+            return f"{instance_id} lost its ECS agent and {DOMAIN} is silent, terminated it"
+    for instance_id, lifecycle in s.primaries.items():
+        host = s.hosts.get(instance_id)
+        if lifecycle != "InService":
+            continue
+        if host and host["status"] == "DRAINING":
+            mark_unhealthy(instance_id)
+            return f"{instance_id} is draining, asked the group to replace it"
+        stuck = not s.usable(instance_id) and not s.task_on(instance_id)
+        if stuck and s.age(instance_id) > PRIMARY_READY_LIMIT:
+            mark_unhealthy(instance_id)
+            return (
+                f"{instance_id} is not ready {s.age(instance_id):.0f}s after launch, replacing it"
+            )
+    return None
+
+
+def continue_failback(s):
+    standby = s.hosts.get(s.standby)
+    if not standby or standby["status"] != "DRAINING" or s.state(s.standby) != "running":
+        return None
+    if not s.ready:
+        set_state(standby, "ACTIVE")
+        return "no primary can take the task, kept it on the standby"
+    task = s.task_on(s.standby)
+    if task:
+        if task["desiredStatus"] != "RUNNING":
+            return None
+        hand_back(s, task)
+        return f"stopping the task on the standby so it moves to {s.ready}"
+    stops = [t["stoppingAt"] for t in s.tasks if t["host"] == s.standby and t.get("stoppingAt")]
+    if not stops or s.serving == s.ready:
+        return None
+    failed = any(
+        t["host"] == s.ready and t.get("stopCode") in FAILED_STOPS and t["createdAt"] >= max(stops)
+        for t in s.tasks
     )
-
-
-def primary_ready(instance_id):
-    if instance_id not in in_service(group()):
-        return False
-    host = container_instances().get(instance_id)
-    return bool(host and usable(host))
-
-
-def task_on_standby():
-    instance_id, state = standby_instance()
-    if state != "running":
-        return False
-    standby = container_instances().get(instance_id)
-    return bool(standby) and running_task_host() == standby["containerInstanceArn"]
-
-
-def stop_idle_standby():
-    instance_id, state = standby_instance()
-    if state != "running":
+    if not failed:
         return None
-    standby = container_instances().get(instance_id)
-    host = running_task_host()
-    if not host or (standby and host == standby["containerInstanceArn"]):
+    mark_unhealthy(s.ready)
+    set_state(standby, "ACTIVE")
+    return f"the task failed to start on {s.ready}, moved it back to the standby and replacing it"
+
+
+def admit_standby(s):
+    if s.coming or s.serving:
         return None
-    ec2.stop_instances(InstanceIds=[instance_id])
-    return instance_id
+    if s.state(s.standby) != "stopped" or not nowhere_left(s.zones):
+        return None
+    host = s.hosts.get(s.standby)
+    if host and host["status"] == "DRAINING":
+        set_state(host, "ACTIVE")
+    ec2.start_instances(InstanceIds=[s.standby])
+    return f"the group has nowhere left to try, started standby {s.standby}"
 
 
-def give_up_on(event, primary_id, why):
-    if primary_id not in in_service(group()):
-        return f"{primary_id} {why} and left the group, nothing to do"
-    if event_age(event) < FAILBACK_GIVE_UP:
-        raise Failed(f"{primary_id} {why}, trying again")
-    mark_unhealthy(primary_id)
-    return f"{primary_id} {why} on every try, asked the group to replace it"
+def place_task(s):
+    if s.active or "kick" in once or not any(s.usable(i) for i in s.hosts):
+        return None
+    once.add("kick")
+    service = ecs.describe_services(cluster=CLUSTER, services=[SERVICE])["services"][0]
+    if service["runningCount"] or service["pendingCount"]:
+        return None
+    ecs.update_service(cluster=CLUSTER, service=SERVICE, desiredCount=service["desiredCount"])
+    return "the service had no task, asked ECS to place it now"
 
 
-def launch_succeeded(event, context):
-    primary_id = event.get("detail", {}).get("EC2InstanceId")
-    if not primary_id:
-        return "the launch names no instance, nothing to do"
-    if not task_on_standby():
-        idle = stop_idle_standby()
-        if idle:
-            return f"the task already runs elsewhere, stopped the idle standby {idle}"
-        return "the task is not on the standby, nothing to do"
-
-    deadline = time.time() + PRIMARY_JOIN_BUDGET
-    while not primary_ready(primary_id):
-        if time.time() > deadline:
-            return give_up_on(event, primary_id, "never joined the cluster")
-        log.info("waiting for %s to join the cluster", primary_id)
-        time.sleep(20)
-
-    ready_since = time.time()
-    while time.time() - ready_since < FAILBACK_SOAK:
-        time.sleep(20)
-        if not primary_ready(primary_id):
-            return give_up_on(event, primary_id, "stopped being ready")
-    log.info("%s stayed ready for %ds", primary_id, FAILBACK_SOAK)
-    return fail_back(context, primary_id)
+def route_eip(s):
+    host = s.running[0]["host"] if len(s.running) == 1 else None
+    if not host or s.state(host) != "running" or s.eip == host:
+        return None
+    ec2.associate_address(AllocationId=EIP_ALLOC, InstanceId=host, AllowReassociation=True)
+    return f"moved the elastic ip to {host}"
 
 
-def fail_back(context, primary_id):
-    instance_id, state = standby_instance()
-    if state != "running":
-        return f"standby is {state}, nothing to do"
-
-    hosts = container_instances()
-    standby_arn = (hosts.get(instance_id) or {}).get("containerInstanceArn")
-    if standby_arn is None:
-        return f"standby {instance_id} is not in the cluster, nothing to do"
-    if running_task_host() != standby_arn:
-        return "the task is not on the standby, nothing to do"
-
-    primary = hosts.get(primary_id)
-    if not primary or not usable(primary):
-        return f"{primary_id} is not ready, staying on the standby"
-    primary_arn = primary["containerInstanceArn"]
-
-    log.info("draining %s so the task moves back to %s", instance_id, primary_id)
-    set_state(standby_arn, "DRAINING")
-
-    try:
-        target = instance_of(wait_task_on(context, standby_arn, budget=300, equal=False))
-        claim_eip(target)
-        if not wait_healthy(context, budget=180):
-            raise Failed(f"the task moved to {target} but {DOMAIN} is silent")
-    except Failed as e:
-        log.error("handing back failed, pushing the task onto the standby again: %s", e)
-        set_state(standby_arn, "ACTIVE")
-        set_state(primary_arn, "DRAINING")
-        try:
-            wait_task_on(context, standby_arn, budget=240)
-            claim_eip(instance_id)
-        finally:
-            set_state(primary_arn, "ACTIVE")
-        raise Failed(f"{e}. rolled the task back onto the standby")
-
-    log.info("stopping standby %s", instance_id)
-    ec2.stop_instances(InstanceIds=[instance_id])
-    return f"handed back to {target}, standby {instance_id} stopping"
+def start_failback(s):
+    if not s.ready or not s.serving or s.serving != s.standby:
+        return None
+    hand_back(s, s.task_on(s.standby))
+    return f"{s.ready} is ready, moving the task back from standby {s.standby}"
 
 
-def run(action, step):
-    try:
-        outcome = step()
-    except Exception as e:
-        log.exception("%s failed", action)
-        notify(f"netbird {action} failed", f"{type(e).__name__}: {e}")
-        raise
+def finish(s):
+    if not s.serving or s.serving == s.standby or s.eip != s.serving:
+        return None
+    if s.state(s.standby) != "running" or s.standby not in s.hosts or not s.answers():
+        return None
+    ec2.stop_instances(InstanceIds=[s.standby])
+    return f"the task runs on {s.serving} and {DOMAIN} answers, stopped standby {s.standby}"
 
-    log.info("%s: %s", action, outcome)
-    if not outcome.endswith("nothing to do"):
-        notify(f"netbird {action}", outcome)
-    return {"action": action, "outcome": outcome}
+
+def settled(s):
+    if not s.serving or s.eip != s.serving or not s.answers():
+        return False
+    if s.serving == s.standby:
+        return not s.coming
+    return s.state(s.standby) not in ("pending", "running")
+
+
+RULES = [
+    replace_primary,
+    continue_failback,
+    admit_standby,
+    place_task,
+    route_eip,
+    start_failback,
+    finish,
+]
+
+
+def reconcile(context, hops):
+    while True:
+        s = State()
+        for rule in RULES:
+            done = rule(s)
+            if done:
+                log.info("%s: %s", rule.__name__, done)
+                break
+        else:
+            if settled(s):
+                return "settled"
+        if context.get_remaining_time_in_millis() < HANDOFF_RESERVE * 1000:
+            if hops >= MAX_HANDOFFS:
+                return f"still not settled after {hops} hand-offs, waiting for the next event"
+            functions.invoke(
+                FunctionName=context.invoked_function_arn,
+                InvocationType="Event",
+                Payload=json.dumps({"handoff": hops + 1}),
+            )
+            return f"handed off to invocation {hops + 1}"
+        time.sleep(POLL)
 
 
 def handler(event, context):
-    kind = event.get("detail-type")
-    if kind == "ECS Task State Change":
-        log.info("a task reached %s", event.get("detail", {}).get("lastStatus"))
-        outcome = place_eip(event)
-        log.info("eip: %s", outcome)
-        return {"action": "eip", "outcome": outcome}
-
-    if kind == "ECS Container Instance State Change":
-        detail = event.get("detail", {})
-        log.info(
-            "%s is %s, agent connected: %s",
-            detail.get("ec2InstanceId"),
-            detail.get("status"),
-            detail.get("agentConnected"),
-        )
-        return run("replace", lambda: replace_primary(event))
-
-    if kind == "EC2 Instance Launch Unsuccessful":
-        log.info("the group could not launch an instance")
-        return run("failover", lambda: launch_failed(event, context))
-
-    if kind == "EC2 Instance Launch Successful":
-        log.info("the group launched %s", event.get("detail", {}).get("EC2InstanceId"))
-        return run("failback", lambda: launch_succeeded(event, context))
-
-    if kind != "CloudWatch Alarm State Change":
-        return {"skipped": f"{kind} needs no action"}
-
-    detail = event.get("detail", {})
-    name = detail.get("alarmName")
-    state = detail.get("state", {}).get("value")
-    log.info("alarm %s is %s", name, state)
-    if state != "ALARM":
-        return {"skipped": f"state is {state}"}
-    if name != NO_CAPACITY_ALARM:
-        return {"skipped": f"unknown alarm {name}"}
-    return run("failover", lambda: fail_over(context))
+    once.clear()
+    hops = event.get("handoff", 0)
+    log.info("woken by %s", event.get("detail-type") or f"hand-off {hops}")
+    outcome = reconcile(context, hops)
+    log.info("reconcile: %s", outcome)
+    return {"outcome": outcome}

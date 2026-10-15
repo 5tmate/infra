@@ -27,7 +27,11 @@ def _publish_policy(topic_arn: str) -> str:
 
 
 def _lambda_policy(
-    cluster_arn: str, topic_arn: str, standby_name: str, service_name: str, asg_name: str
+    cluster_arn: str,
+    standby_name: str,
+    service_name: str,
+    asg_name: str,
+    function_name: str,
 ) -> str:
     service_arn = f"{cluster_arn.replace(':cluster/', ':service/')}/{service_name}"
     region, account = cluster_arn.split(":")[3:5]
@@ -54,6 +58,7 @@ def _lambda_policy(
                     "Action": [
                         "ecs:DescribeContainerInstances",
                         "ecs:DescribeTasks",
+                        "ecs:StopTask",
                         "ecs:UpdateContainerInstancesState",
                     ],
                     "Resource": "*",
@@ -73,16 +78,41 @@ def _lambda_policy(
                 },
                 {
                     "Effect": "Allow",
+                    "Action": "ec2:TerminateInstances",
+                    "Resource": "*",
+                    "Condition": {"StringEquals": {"ec2:ResourceTag/Name": service_name}},
+                },
+                {
+                    "Effect": "Allow",
+                    "Action": "ssm:SendCommand",
+                    "Resource": f"arn:aws:ssm:{region}::document/AWS-RunShellScript",
+                },
+                {
+                    "Effect": "Allow",
+                    "Action": "ssm:SendCommand",
+                    "Resource": f"arn:aws:ec2:{region}:{account}:instance/*",
+                    "Condition": {"StringEquals": {"ssm:resourceTag/Name": standby_name}},
+                },
+                {"Effect": "Allow", "Action": "ssm:GetCommandInvocation", "Resource": "*"},
+                {
+                    "Effect": "Allow",
+                    "Action": "lambda:InvokeFunction",
+                    "Resource": f"arn:aws:lambda:{region}:{account}:function:{function_name}",
+                },
+                {
+                    "Effect": "Allow",
                     "Action": ["ecs:DescribeServices", "ecs:UpdateService"],
                     "Resource": service_arn,
                 },
                 {
                     "Effect": "Allow",
-                    "Action": "autoscaling:DescribeAutoScalingGroups",
+                    "Action": [
+                        "autoscaling:DescribeAutoScalingGroups",
+                        "autoscaling:DescribeScalingActivities",
+                    ],
                     "Resource": "*",
                 },
                 {"Effect": "Allow", "Action": "autoscaling:SetInstanceHealth", "Resource": asg_arn},
-                {"Effect": "Allow", "Action": "sns:Publish", "Resource": topic_arn},
             ],
         }
     )
@@ -143,11 +173,13 @@ class Failover(pulumi.ComponentResource):
         standby_name: str,
         management_domain: str,
         health_url: str,
+        skip_hold_path: str,
         opts: pulumi.ResourceOptions | None = None,
     ):
         super().__init__("netbird:failover:Failover", name, None, opts)
         child = pulumi.ResourceOptions(parent=self)
         tags = {"Name": resource_name}
+        function_name = f"{resource_name}-failover"
 
         self.alerts = aws.sns.Topic("alerts", name=f"{resource_name}-alerts", tags=tags, opts=child)
         aws.sns.TopicPolicy(
@@ -171,7 +203,7 @@ class Failover(pulumi.ComponentResource):
             comparison_operator="LessThanThreshold",
             treat_missing_data="notBreaching",
             alarm_description=(
-                "15 of the last 20 minutes had no running instance, fail over to the standby"
+                "15 of the last 20 minutes had no running instance, wake the failover lambda"
             ),
             alarm_actions=[self.alerts.arn],
             tags=tags,
@@ -212,15 +244,15 @@ class Failover(pulumi.ComponentResource):
         aws.iam.RolePolicy(
             "failover-lambda-policy",
             role=role.name,
-            policy=pulumi.Output.all(cluster.arn, self.alerts.arn, asg_name).apply(
-                lambda a: _lambda_policy(a[0], a[1], standby_name, resource_name, a[2])
+            policy=pulumi.Output.all(cluster.arn, asg_name).apply(
+                lambda a: _lambda_policy(a[0], standby_name, resource_name, a[1], function_name)
             ),
             opts=child,
         )
 
         function_logs = aws.cloudwatch.LogGroup(
             "failover-logs",
-            name=f"/aws/lambda/{resource_name}-failover",
+            name=f"/aws/lambda/{function_name}",
             retention_in_days=14,
             tags=tags,
             opts=child,
@@ -228,7 +260,7 @@ class Failover(pulumi.ComponentResource):
 
         self.function = aws.lambda_.Function(
             "failover-function",
-            name=f"{resource_name}-failover",
+            name=function_name,
             role=role.arn,
             runtime="python3.12",
             handler="handler.handler",
@@ -245,8 +277,7 @@ class Failover(pulumi.ComponentResource):
                     "EIP_ALLOC": eip_id,
                     "DOMAIN": management_domain,
                     "HEALTH_URL": health_url,
-                    "NO_CAPACITY_ALARM": f"{resource_name}-no-capacity",
-                    "TOPIC_ARN": self.alerts.arn,
+                    "SKIP_HOLD_PATH": skip_hold_path,
                 }
             },
             tags=tags,
