@@ -215,8 +215,14 @@ pull() {
     sleep $((n * 5))
   done
 }
-for image in $IMAGES; do pull "$image" & done
-wait
+pids=()
+for image in $IMAGES; do
+  pull "$image" &
+  pids+=($!)
+done
+failed=0
+for pid in "${pids[@]}"; do wait "$pid" || failed=1; done
+exit "$failed"
 PREPULL
 chmod +x /usr/local/bin/netbird-prepull
 
@@ -230,7 +236,7 @@ Requires=docker.service
 [Service]
 Type=oneshot
 ExecStart=/usr/local/bin/netbird-prepull
-TimeoutStartSec=600
+TimeoutStartSec=180
 UNIT
 
 install -d /etc/systemd/system/ecs.service.d
@@ -239,6 +245,14 @@ cat > /etc/systemd/system/ecs.service.d/after-prepare.conf <<'UNIT'
 After=netbird-prepare.service
 Requires=netbird-prepare.service
 UNIT
+
+if [ "$ROLE" = "primary" ]; then
+  cat > /etc/systemd/system/ecs.service.d/after-prepull.conf <<'UNIT'
+[Unit]
+After=netbird-prepull.service
+Requires=netbird-prepull.service
+UNIT
+fi
 
 grep -q "^ECS_CLUSTER=" /etc/ecs/ecs.config 2>/dev/null || echo "ECS_CLUSTER=${CLUSTER}" >> /etc/ecs/ecs.config
 grep -q "^ECS_IMAGE_PULL_BEHAVIOR=" /etc/ecs/ecs.config || echo "ECS_IMAGE_PULL_BEHAVIOR=prefer-cached" >> /etc/ecs/ecs.config
