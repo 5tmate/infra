@@ -4,6 +4,7 @@ import pulumi_aws as aws
 from cloudfront import ALL_METHODS, READ_METHODS, Cdn
 from ec2 import SpotHost, render_user_data
 from ecs import NetBirdService
+from ecs.containers import SKIP_HOLD_FILE
 from failover import Failover
 from s3 import NetBirdConfig, PrivateBucket
 from vpc import Network
@@ -193,6 +194,7 @@ failover = Failover(
     standby_name=STANDBY_NAME,
     management_domain=management_domain,
     health_url=health_url,
+    skip_hold_path=f"{NB_DIR}/data/{SKIP_HOLD_FILE}",
 )
 
 netbird = NetBirdService(

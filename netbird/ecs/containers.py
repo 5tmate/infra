@@ -12,10 +12,13 @@ case "$line" in *" 200 "*) return 0 ;; esac
 return 1
 """
 SERVER_HOLD = 60
+SKIP_HOLD_FILE = "skip-hold"
 SERVER_ENTRY = """
 probe() {
 __PROBE__
 }
+skip_hold=__SKIP_HOLD__
+rm -f "$skip_hold"
 stopping=0
 trap 'stopping=1' TERM
 /go/bin/netbird-server --config /etc/netbird/config.yaml &
@@ -35,7 +38,10 @@ next() {
   fi
 }
 while [ -z "$status" ] && [ "$stopping" = 0 ]; do next "$server"; done
-if [ -z "$status" ] && probe > /dev/null; then
+if [ -e "$skip_hold" ]; then
+  rm -f "$skip_hold"
+  echo "stop requested for a failback, stopping without the hold"
+elif [ -z "$status" ] && probe > /dev/null; then
   echo "stop requested while healthy, serving __HOLD__s more before stopping"
   sleep __HOLD__ &
   timer=$!
@@ -268,9 +274,9 @@ def container_definitions(
             "memoryReservation": 768,
             "entryPoint": ["bash", "-c"],
             "command": [
-                SERVER_ENTRY.replace("__PROBE__", server_probe.strip()).replace(
-                    "__HOLD__", str(SERVER_HOLD)
-                )
+                SERVER_ENTRY.replace("__PROBE__", server_probe.strip())
+                .replace("__HOLD__", str(SERVER_HOLD))
+                .replace("__SKIP_HOLD__", f"/var/lib/netbird/{SKIP_HOLD_FILE}")
             ],
             "stopTimeout": SERVER_HOLD + 7,
             "environment": [{"name": "AWS_REGION", "value": region}],
