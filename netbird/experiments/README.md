@@ -1,45 +1,60 @@
 # 切換實驗
 
-在本機跑，模擬故障、量服務斷線多久。腳本會真的動到 `5tmate-netbird` 的主機，跑的時候服務會斷線。
+在本機跑，模擬故障、量 netbird 服務對外斷線多久。腳本會真的動到 `5tmate-netbird` 的主機，跑的時候服務會斷線。
 
 ## 需要
 
-- AWS CLI，profile 要能操作 ASG、EC2、ECS、CloudWatch
+- AWS CLI，profile 要能操作 ASG、EC2、ECS、SSM、CloudTrail，FIS 那支還要能建 IAM role 和 FIS 範本
 - `uv`，第一次跑會在這個資料夾建 `.venv` 並裝 boto3
 - `curl`
 
-## 腳本
+## 檔案
 
-| 腳本 | 做什麼 | 大約多久 |
-|---|---|---|
-| `run-b.sh` | 把 spot 出價調成 0.001 讓 ASG 買不到，終止主機，等服務切到備援機，改回出價，再等 Lambda 切回主機 | 12 分鐘 |
-| `run-d.sh` | 把主機在 ECS 設成 DRAINING，模擬 spot 收回，看舊 task 多撐的時間跟換機 | 6 分鐘 |
-| `monitor.py` | 前兩個腳本會自己開。每秒打一次登入網址，每 5 秒記一次 EIP、ASG、task、備援機的狀態，新主機穩定 3 分鐘後結束 | |
-| `save_events.py` | 跑完之後另外存 ECS service 事件、ASG 活動、task 跟機器的時間 | |
+| 檔案 | 做什麼 |
+| --- | --- |
+| `probe.sh` | 每秒打一次登入網址，把 `時間 回應碼` 寫進 `probe.txt`，逾時記 000，可以單獨跑 |
+| `lib.sh` | 共用函式，run 腳本都 source 它。開跑前檢查、改出價、終止主機、開關探測、等狀態、收尾時還原出價、拆 FIS、跑 report |
+| `report.py` | 只讀 CloudTrail 加 ECS、ASG、EC2 的 describe，不碰 CloudWatch log。算斷線、ASG 活動、ECS task、CloudTrail 動作，合成時間線，寫成 `<run 資料夾>.md`，可以重跑 |
+| `run-d.sh` | spot 收回，把主機在 ECS 設成 DRAINING，看換機。約 6 分 |
+| `run-b.sh` | 把出價調成 0.001 讓三個 AZ 都買不到，終止主機，切到 standby 後改回出價，等切回。約 12 分 |
+| `run-e.sh` | 用 SSM 讓主機核心當機，看整台掛掉的接手。約 10 分 |
+| `run-f.sh` | 跟 run-b 一樣，但出價維持一段時間才改回，用來看 ASG 換 AZ 的順序和間隔。約 12 分 |
+| `run-fis.sh` | 用 FIS 讓 ASG 在三個 AZ 開機都回容量不足，驗證真的沒貨時的切換。每次約 0.5 美元，約 12 分 |
 
 ## 用法
 
 ```bash
-AWS_PROFILE=<profile> ./run-b.sh
-AWS_PROFILE=<profile> ./run-d.sh
-AWS_PROFILE=<profile> .venv/bin/python save_events.py results/<日期>/<資料夾>
+AWS_PROFILE=jerry RESULTS_DIR=/home/jerry/T5/5tmate/實驗 ./run-b.sh
 ```
 
-- 前面加 `DRY_RUN=1` 只檢查服務狀態，不會動到主機
-- 第一個參數是資料夾名稱的前綴，預設是 `實驗B`、`實驗D`
-- 結果預設存在這個資料夾的 `results/<日期>/`，用 `RESULTS_DIR` 可以改到 repo 外面
+- 第一個參數是資料夾名稱的前綴，預設是 `實驗B`、`實驗D` 等，例如 `./run-b.sh 實驗B-延伸6`
+- `RESULTS_DIR` 指到 `實驗` 資料夾，結果就會寫進 `實驗/<日期>/<前綴>-<時間戳>/`，不設的話預設寫在這個資料夾的 `results/`
+- `DRY_RUN=1` 只做開跑前檢查，不會動到主機
+- `run-f.sh` 可用 `HOLD_MINUTES` 調維持低價的時間，預設 8 分
+- `run-fis.sh` 可用 `DURATION` 調注入時間，預設 5 分
+
+CloudTrail 有幾分鐘延遲，腳本結束時會自動跑一次 report.py。如果那時資料還不全，晚點可以再跑一次，它會覆蓋同一份 md：
+
+```bash
+.venv/bin/python report.py /home/jerry/T5/5tmate/實驗/<日期>/<資料夾>
+```
+
+## 產出
 
 每次跑的資料夾裡有：
 
 | 檔案 | 內容 |
-|---|---|
-| `actions.log` | 腳本做了什麼 |
-| `events.log` | 每個狀態變化的時間 |
-| `probe.csv` | 每一秒的結果 |
-| `summary.txt` | 斷線幾次、各多久 |
+| --- | --- |
+| `probe.txt` | 每秒一行 `時間 回應碼` |
+| `actions.log` | 腳本做了什麼，附時間 |
+| `<資料夾>.md` | report.py 整理的斷線、時間線、ASG 活動、ECS task、CloudTrail 動作 |
+| `fis-*.json`、`fis-experiment-id` | 只有 run-fis 會有，FIS 範本和實驗 id |
+
+目的、預期、結論和 `實驗/切換時間.md` 的彙整還是手寫，腳本只產生資料。
 
 ## 注意
 
-- 一次只跑一個。開始前會確認服務正常、EIP 在主機上，不正常就不跑
-- `run-b.sh` 中途按 Ctrl-C 也會把出價改回去
-- 斷線時間是從本機經過 CloudFront 量的，連續兩次失敗才算斷，連續兩次成功才算恢復，誤差約 1 到 3 秒
+- 一次只跑一個。開跑前 `preflight` 會確認服務正常、EIP 在主機上、standby 關機、出價是預設值，有一項不對就不跑
+- 動到出價的腳本中途按 Ctrl-C 也會把出價改回去
+- `run-fis.sh` 不管正常結束還是中斷，都會刪掉它建的 FIS 範本和 IAM role
+- 斷線時間是從本機經過 CloudFront 量的，連續兩次失敗才算斷，連續兩次成功才算恢復，誤差約 1 到 3 秒。本機網路或 DNS 偶發變慢造成的單次逾時，report.py 會另外列出來，不算斷線
