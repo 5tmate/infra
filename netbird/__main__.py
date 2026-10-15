@@ -56,8 +56,10 @@ network = Network(
     resource_name=NAME,
     vpc_cidr="10.2.0.0/24",
     subnet_cidr="10.2.0.0/28",
+    second_subnet_cidr="10.2.0.32/28",
     standby_subnet_cidr="10.2.0.16/28",
     az="ap-northeast-1a",
+    second_az="ap-northeast-1d",
     standby_az="ap-northeast-1c",
 )
 
@@ -172,7 +174,7 @@ host = SpotHost(
     "host",
     resource_name=NAME,
     cluster=cluster,
-    subnet_id=network.subnet_id,
+    subnet_ids=network.host_subnet_ids,
     security_group_ids=[sg.id, dashboard_sg.id],
     ami=ami,
     instance_types=INSTANCE_TYPES,

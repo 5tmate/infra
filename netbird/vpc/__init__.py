@@ -10,8 +10,10 @@ class Network(pulumi.ComponentResource):
         resource_name: str,
         vpc_cidr: str,
         subnet_cidr: str,
+        second_subnet_cidr: str,
         standby_subnet_cidr: str,
         az: str,
+        second_az: str,
         standby_az: str,
         opts: pulumi.ResourceOptions | None = None,
     ):
@@ -34,6 +36,15 @@ class Network(pulumi.ComponentResource):
             availability_zone=az,
             map_public_ip_on_launch=True,
             tags=tags,
+            opts=child,
+        )
+        self.second_subnet = aws.ec2.Subnet(
+            "second-subnet",
+            vpc_id=self.vpc.id,
+            cidr_block=second_subnet_cidr,
+            availability_zone=second_az,
+            map_public_ip_on_launch=True,
+            tags={"Name": f"{resource_name}-second"},
             opts=child,
         )
         self.standby_subnet = aws.ec2.Subnet(
@@ -61,6 +72,12 @@ class Network(pulumi.ComponentResource):
             opts=child,
         )
         aws.ec2.RouteTableAssociation(
+            "second-route",
+            subnet_id=self.second_subnet.id,
+            route_table_id=route_table.id,
+            opts=child,
+        )
+        aws.ec2.RouteTableAssociation(
             "standby-route",
             subnet_id=self.standby_subnet.id,
             route_table_id=route_table.id,
@@ -68,12 +85,12 @@ class Network(pulumi.ComponentResource):
         )
 
         self.vpc_id = self.vpc.id
-        self.subnet_id = self.subnet.id
+        self.host_subnet_ids = [self.subnet.id, self.second_subnet.id, self.standby_subnet.id]
         self.standby_subnet_id = self.standby_subnet.id
         self.register_outputs(
             {
                 "vpc_id": self.vpc_id,
-                "subnet_id": self.subnet_id,
+                "host_subnet_ids": self.host_subnet_ids,
                 "standby_subnet_id": self.standby_subnet_id,
             }
         )

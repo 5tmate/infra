@@ -40,7 +40,7 @@ class SpotHost(pulumi.ComponentResource):
         *,
         resource_name: str,
         cluster: aws.ecs.Cluster,
-        subnet_id: pulumi.Input[str],
+        subnet_ids: Sequence[pulumi.Input[str]],
         security_group_ids: Sequence[pulumi.Input[str]],
         ami: str,
         instance_types: Sequence[str],
@@ -127,7 +127,7 @@ class SpotHost(pulumi.ComponentResource):
         self.asg = aws.autoscaling.Group(
             "asg",
             name=resource_name,
-            vpc_zone_identifiers=[subnet_id],
+            vpc_zone_identifiers=list(subnet_ids),
             min_size=0,
             max_size=1,
             desired_capacity=desired_capacity,
