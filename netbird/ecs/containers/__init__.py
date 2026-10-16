@@ -1,11 +1,14 @@
+from .certs import certs
 from .common import make_logs
 from .config import config
 from .dashboard import dashboard
 from .litestream import replicate, restores
+from .relay import relay
 from .server import SKIP_HOLD_FILE, server
+from .signal import signal
 from .stun import stun
 
-__all__ = ["SKIP_HOLD_FILE", "container_definitions"]
+__all__ = ["SKIP_HOLD_FILE", "container_definitions", "relays_container_definitions"]
 
 
 def container_definitions(
@@ -37,4 +40,37 @@ def container_definitions(
         ),
         server(image=server_image, server_name=server_name, region=region, logs=logs),
         stun(image=stun_image, logs=logs),
+    ]
+
+
+def relays_container_definitions(
+    *,
+    log_group,
+    region,
+    certs_image,
+    signal_image,
+    relay_image,
+    signal_domain,
+    relay_domain,
+    auth_secret_arn,
+    acme_email,
+):
+    logs = make_logs(log_group, region)
+    cert_dir = "/etc/letsencrypt/live/relays"
+    return [
+        certs(
+            image=certs_image,
+            region=region,
+            email=acme_email,
+            domains=[signal_domain, relay_domain],
+            logs=logs,
+        ),
+        signal(image=signal_image, cert_dir=cert_dir, logs=logs),
+        relay(
+            image=relay_image,
+            domain=relay_domain,
+            auth_secret_arn=auth_secret_arn,
+            cert_dir=cert_dir,
+            logs=logs,
+        ),
     ]

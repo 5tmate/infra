@@ -3,8 +3,8 @@ import pulumi_aws as aws
 import pulumi_random as random
 
 from cloudfront import ALL_METHODS, READ_METHODS, Cdn
-from ec2 import SpotHost, render_user_data
-from ecs import NetBirdService
+from ec2 import RelaysHost, SpotHost, render_user_data
+from ecs import NetBirdService, RelaysService
 from ecs.containers import SKIP_HOLD_FILE
 from failover import Failover
 from s3 import NetBirdConfig, PrivateBucket
@@ -18,6 +18,9 @@ LITESTREAM_IMAGE = "litestream/litestream:0.5.17"
 DASHBOARD_IMAGE = "netbirdio/dashboard:v2.93.0"
 SERVER_IMAGE = "netbirdio/netbird-server:0.79.0-rc.1"
 STUN_IMAGE = "netbirdio/relay:0.79.0-rc.1"
+SIGNAL_IMAGE = "netbirdio/signal:0.79.0-rc.1"
+RELAY_IMAGE = "netbirdio/relay:0.79.0-rc.1"
+CERTS_IMAGE = "certbot/dns-route53:v2.11.0"
 AWS_CLI_IMAGE = "public.ecr.aws/aws-cli/aws-cli:2.37.1"
 AMI_PARAMETER = "/aws/service/ecs/optimized-ami/amazon-linux-2023/arm64/recommended/image_id"
 PEER_IP_METHODS = ["Login", "Sync", "SyncMeta"]  # NetBird 只在這幾個 gRPC 讀 peer 的 IP
@@ -29,7 +32,10 @@ management_domain = f"{hostname}.{zone_name}"  # 指 443 的 CloudFront
 dashboard_domain = f"admin-{hostname}.{zone_name}"  # 指 80 的 CloudFront
 stun_domain = f"stun-{hostname}.{zone_name}"  # 指 EIP，只給 STUN
 origin_domain = f"origin-{hostname}.{zone_name}"  # 指 EIP，CloudFront 回源用，Let's Encrypt 簽這個
+signal_domain = f"signal-{hostname}.{zone_name}"  # 指 relays EIP，直連 signal
+relay_domain = f"relay-{hostname}.{zone_name}"  # 指 relays EIP，直連 relay 和 STUN
 desired_capacity = config.get_int("desired_capacity", 1)  # 主機數
+relays_instance_type = config.get("relays_instance_type", "t4g.nano")  # relays 機型
 default_tags = pulumi.Config("aws").require_object("defaultTags")
 
 
@@ -96,6 +102,8 @@ if owner_password_hash is None:
     owner_password_hash = owner_password.bcrypt_hash
     pulumi.export("owner_password", owner_password.result)
 
+auth_secret = secret_or_random("auth_secret")
+
 server_config = NetBirdConfig(
     "config",
     bucket=backup.bucket.id,
@@ -106,7 +114,7 @@ server_config = NetBirdConfig(
     stun_uri=stun_uri,
     issuer=idp_url,
     trusted_peers=sorted(entry.cidr for entry in cloudfront_origins.entries),
-    auth_secret=secret_or_random("auth_secret"),
+    auth_secret=auth_secret,
     session_key=secret_or_random("session_key"),
     store_encryption_key=secret_or_random("store_encryption_key"),
     owner_email=owner_email,
@@ -250,6 +258,77 @@ standby = aws.ec2.Instance(
     opts=pulumi.ResourceOptions(depends_on=[host.backup_access, netbird.service]),
 )
 
+relays_eip = aws.ec2.Eip("relays-eip", domain="vpc", tags={"Name": f"{NAME}-relays"})
+relays_sg = aws.ec2.SecurityGroup(
+    "relays-ingress",
+    vpc_id=network.vpc_id,
+    description="netbird signal, relay and stun, direct",
+    ingress=[
+        {
+            "description": "signal gRPC",
+            "protocol": "tcp",
+            "from_port": 443,
+            "to_port": 443,
+            **anyone,
+        },
+        {
+            "description": "relay ws",
+            "protocol": "tcp",
+            "from_port": 8443,
+            "to_port": 8443,
+            **anyone,
+        },
+        {
+            "description": "relay quic",
+            "protocol": "udp",
+            "from_port": 8443,
+            "to_port": 8443,
+            **anyone,
+        },
+        {"description": "STUN", "protocol": "udp", "from_port": 3478, "to_port": 3478, **anyone},
+    ],
+    egress=egress_all,
+    tags={"Name": f"{NAME}-relays"},
+)
+relays_cluster = aws.ecs.Cluster(
+    "relays-cluster", name=f"{NAME}-relays", tags={"Name": f"{NAME}-relays"}
+)
+relays_logs = aws.cloudwatch.LogGroup(
+    "relays-logs",
+    name=f"/ecs/{NAME}-relays",
+    retention_in_days=14,
+    tags={"Name": f"{NAME}-relays"},
+)
+
+relays_host = RelaysHost(
+    "relays-host",
+    resource_name=f"{NAME}-relays",
+    cluster=relays_cluster,
+    subnet_ids=[*network.host_subnet_ids, network.standby_subnet_id],
+    security_group_ids=[relays_sg.id],
+    ami=ami,
+    instance_type=relays_instance_type,
+    eip_allocation_id=relays_eip.id,
+    region=region,
+)
+
+relays_service = RelaysService(
+    "relays-service",
+    resource_name=f"{NAME}-relays",
+    cluster=relays_cluster,
+    log_group=relays_logs.name,
+    region=region,
+    certs_image=CERTS_IMAGE,
+    signal_image=SIGNAL_IMAGE,
+    relay_image=RELAY_IMAGE,
+    signal_domain=signal_domain,
+    relay_domain=relay_domain,
+    auth_secret=auth_secret,
+    acme_email=config.require_secret("acme_email"),
+    zone_id=zone.zone_id,
+    nb_dir=NB_DIR,
+)
+
 dashboard = Cdn(
     "dashboard",
     resource_name=NAME,
@@ -325,6 +404,24 @@ aws.route53.Record(
     aliases=cloudfront_alias(management),
 )
 
+aws.route53.Record(
+    "signal-record",
+    zone_id=zone.zone_id,
+    name=signal_domain,
+    type="A",
+    ttl=60,
+    records=[relays_eip.public_ip],
+)
+
+aws.route53.Record(
+    "relay-record",
+    zone_id=zone.zone_id,
+    name=relay_domain,
+    type="A",
+    ttl=60,
+    records=[relays_eip.public_ip],
+)
+
 pulumi.export("asg_name", host.asg_name)
 pulumi.export("public_ip", eip.public_ip)
 pulumi.export("management_domain", management_domain)
@@ -337,3 +434,6 @@ pulumi.export("security_group_id", sg.id)
 pulumi.export("dashboard_security_group_id", dashboard_sg.id)
 pulumi.export("alerts_topic_arn", failover.topic_arn)
 pulumi.export("failover_function", failover.function_name)
+pulumi.export("relays_public_ip", relays_eip.public_ip)
+pulumi.export("signal_domain", signal_domain)
+pulumi.export("relay_domain", relay_domain)

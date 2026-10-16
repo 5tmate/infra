@@ -88,3 +88,33 @@ def dns01_challenge(zone_id: str, domains: Sequence[str]) -> str:
             ],
         }
     )
+
+
+def associate_address() -> str:
+    return json.dumps(
+        {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Effect": "Allow",
+                    "Action": "ec2:AssociateAddress",
+                    "Resource": "*",
+                }
+            ],
+        }
+    )
+
+
+def read_secret(parameter_arn: str) -> str:
+    return json.dumps(
+        {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Effect": "Allow",
+                    "Action": "ssm:GetParameters",
+                    "Resource": parameter_arn,
+                }
+            ],
+        }
+    )
