@@ -85,7 +85,7 @@ class Network(pulumi.ComponentResource):
         )
 
         self.vpc_id = self.vpc.id
-        self.host_subnet_ids = [self.subnet.id, self.second_subnet.id, self.standby_subnet.id]
+        self.host_subnet_ids = [self.subnet.id, self.second_subnet.id]
         self.standby_subnet_id = self.standby_subnet.id
         self.register_outputs(
             {

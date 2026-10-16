@@ -87,8 +87,7 @@ def nowhere_left(zones):
         if activity["StatusCode"] not in ("Failed", "Cancelled"):
             break
         tried.append(json.loads(activity.get("Details") or "{}").get("Availability Zone"))
-    repeated = len(tried) > len(set(tried))
-    return bool(tried) and (None in tried or repeated or set(zones) <= set(tried))
+    return bool(tried) and (None in tried or set(zones) <= set(tried))
 
 
 class State:
