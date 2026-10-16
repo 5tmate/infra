@@ -1,5 +1,6 @@
 import pulumi
 import pulumi_aws as aws
+import pulumi_random as random
 
 from cloudfront import ALL_METHODS, READ_METHODS, Cdn
 from ec2 import SpotHost, render_user_data
@@ -80,6 +81,13 @@ backup = PrivateBucket(
     tags={"Name": BACKUP_BUCKET, "Purpose": "litestream-backup"},
 )
 
+owner_email = config.get("owner_email") or f"admin@{zone_name}"
+owner_password_hash = config.get_secret("owner_password_hash")
+if owner_password_hash is None:
+    owner_password = random.RandomPassword("owner-password", length=20, special=False)
+    owner_password_hash = owner_password.bcrypt_hash
+    pulumi.export("owner_password", owner_password.result)
+
 server_config = NetBirdConfig(
     "config",
     bucket=backup.bucket.id,
@@ -93,8 +101,8 @@ server_config = NetBirdConfig(
     auth_secret=config.require_secret("auth_secret"),
     session_key=config.require_secret("session_key"),
     store_encryption_key=config.require_secret("store_encryption_key"),
-    owner_email=config.require_secret("owner_email"),
-    owner_password_hash=config.require_secret("owner_password_hash"),
+    owner_email=owner_email,
+    owner_password_hash=owner_password_hash,
     acme_email=config.require_secret("acme_email"),
 )
 

@@ -1,16 +1,12 @@
 config:
   aws:region: ap-northeast-1
   5tmate-netbird:zone_name: 5tmate.threatreveal.org
-  5tmate-netbird:owner_email:
-    secure: v1:MsSoch4vbqN/dWdZ:bh9UC5kej+I235fi3hrh/pzDyb/WNCl1xx1rjub4JOcC
   5tmate-netbird:acme_email:
     secure: v1:qpw6Ko7Qx1SZyNvo:0Frc1X6UM+8pWrreIv4fbk7P4Z20YlAZ7zAGsedANIhsoerTHzb4
   aws:defaultTags:
     tags:
       App: 5tmate
       ManagedBy: pulumi
-  5tmate-netbird:owner_password_hash:
-    secure: v1:aAldY6YeN6maIYG+:HrERboA1mdHncXFI8xRvKiD0UGjPrskluKyY6n23JJ/LzBg5PWUrWFBttFQewIO6wCkd38w3GlYeWgE/hrCswRWfObZ3Mg7dyWRMsw==
   5tmate-netbird:auth_secret:
     secure: v1:d4BW5CUAANLrchXT:+AqbBkzyJfUqVWXpkqG0U0t820DpuQVxTD+qF9vFGIuyVLNiu5xyxGOnQZvShU2VVs48vp6PhRlPrbgx
   5tmate-netbird:session_key:
