@@ -32,8 +32,7 @@ management_domain = f"{hostname}.{zone_name}"  # 指 443 的 CloudFront
 dashboard_domain = f"admin-{hostname}.{zone_name}"  # 指 80 的 CloudFront
 stun_domain = f"stun-{hostname}.{zone_name}"  # 指 EIP，只給 STUN
 origin_domain = f"origin-{hostname}.{zone_name}"  # 指 EIP，CloudFront 回源用，Let's Encrypt 簽這個
-signal_domain = f"signal-{hostname}.{zone_name}"  # 指 relays EIP，直連 signal
-relay_domain = f"relay-{hostname}.{zone_name}"  # 指 relays EIP，直連 relay 和 STUN
+relays_domain = f"relays-{hostname}.{zone_name}"  # 指 relays EIP，signal + relay + stun 直連
 desired_capacity = config.get_int("desired_capacity", 1)  # 主機數
 relays_instance_type = config.get("relays_instance_type", "t4g.nano")  # relays 機型
 default_tags = pulumi.Config("aws").require_object("defaultTags")
@@ -321,8 +320,7 @@ relays_service = RelaysService(
     certs_image=CERTS_IMAGE,
     signal_image=SIGNAL_IMAGE,
     relay_image=RELAY_IMAGE,
-    signal_domain=signal_domain,
-    relay_domain=relay_domain,
+    domain=relays_domain,
     auth_secret=auth_secret,
     acme_email=config.require_secret("acme_email"),
     zone_id=zone.zone_id,
@@ -405,18 +403,9 @@ aws.route53.Record(
 )
 
 aws.route53.Record(
-    "signal-record",
+    "relays-record",
     zone_id=zone.zone_id,
-    name=signal_domain,
-    type="A",
-    ttl=60,
-    records=[relays_eip.public_ip],
-)
-
-aws.route53.Record(
-    "relay-record",
-    zone_id=zone.zone_id,
-    name=relay_domain,
+    name=relays_domain,
     type="A",
     ttl=60,
     records=[relays_eip.public_ip],
@@ -435,5 +424,4 @@ pulumi.export("dashboard_security_group_id", dashboard_sg.id)
 pulumi.export("alerts_topic_arn", failover.topic_arn)
 pulumi.export("failover_function", failover.function_name)
 pulumi.export("relays_public_ip", relays_eip.public_ip)
-pulumi.export("signal_domain", signal_domain)
-pulumi.export("relay_domain", relay_domain)
+pulumi.export("relays_domain", relays_domain)

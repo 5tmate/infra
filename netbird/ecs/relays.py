@@ -19,8 +19,7 @@ class RelaysService(pulumi.ComponentResource):
         certs_image: str,
         signal_image: str,
         relay_image: str,
-        signal_domain: str,
-        relay_domain: str,
+        domain: str,
         auth_secret: pulumi.Input[str],
         acme_email: pulumi.Input[str],
         nb_dir: str,
@@ -69,7 +68,7 @@ class RelaysService(pulumi.ComponentResource):
         aws.iam.RolePolicy(
             "relays-task-dns01",
             role=task_role.name,
-            policy=policies.dns01_challenge(zone_id, [signal_domain, relay_domain]),
+            policy=policies.dns01_challenge(zone_id, [domain]),
             opts=child,
         )
 
@@ -89,8 +88,7 @@ class RelaysService(pulumi.ComponentResource):
                     certs_image=certs_image,
                     signal_image=signal_image,
                     relay_image=relay_image,
-                    signal_domain=signal_domain,
-                    relay_domain=relay_domain,
+                    domain=domain,
                     auth_secret_arn=secret.arn,
                     acme_email=acme_email,
                 )
