@@ -11,7 +11,6 @@ from vpc import Network
 
 NAME = pulumi.get_project()
 STANDBY_NAME = f"{NAME}-standby"
-BACKUP_BUCKET = f"{NAME}-backup"
 NB_DIR = "/opt/netbird"
 INSTANCE_TYPES = ["t4g.small", "t4g.medium", "m6g.medium"]
 LITESTREAM_IMAGE = "litestream/litestream:0.5.17"
@@ -40,6 +39,7 @@ health_url = f"{idp_url}/.well-known/openid-configuration"  # Lambda 探活
 
 zone = aws.route53.get_zone(name=zone_name, private_zone=False)
 region = aws.get_region().name
+BACKUP_BUCKET = f"{region}-{NAME}-backup"
 ami = aws.ssm.get_parameter(name=AMI_PARAMETER).value
 cloudfront_origins = aws.ec2.get_managed_prefix_list(
     name="com.amazonaws.global.cloudfront.origin-facing"
