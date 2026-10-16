@@ -70,7 +70,6 @@ def server(*, image, server_name, region, logs):
             {"containerName": "litestream", "condition": "START"},
             {"containerName": "config", "condition": "SUCCESS"},
             {"containerName": "dashboard", "condition": "START"},
-            {"containerName": "stun", "condition": "START"},
         ],
         "portMappings": [{"containerPort": 443, "hostPort": 443, "protocol": "tcp"}],
         "healthCheck": health_check("bash", server_probe, interval=5, retries=2, start_period=300),

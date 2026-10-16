@@ -17,7 +17,6 @@ INSTANCE_TYPES = ["t4g.small", "t4g.medium", "m6g.medium"]
 LITESTREAM_IMAGE = "litestream/litestream:0.5.17"
 DASHBOARD_IMAGE = "netbirdio/dashboard:v2.93.0"
 SERVER_IMAGE = "netbirdio/netbird-server:0.79.0-rc.1"
-STUN_IMAGE = "netbirdio/relay:0.79.0-rc.1"
 SIGNAL_IMAGE = "netbirdio/signal:0.79.0-rc.1"
 RELAY_IMAGE = "netbirdio/relay:0.79.0-rc.1"
 CERTS_IMAGE = "certbot/dns-route53:v2.11.0"
@@ -30,7 +29,6 @@ zone_name = config.require("zone_name")  # Route53 zone
 hostname = config.get("hostname", "netbird")  # 管理網域主機名
 management_domain = f"{hostname}.{zone_name}"  # 指 443 的 CloudFront
 dashboard_domain = f"admin-{hostname}.{zone_name}"  # 指 80 的 CloudFront
-stun_domain = f"stun-{hostname}.{zone_name}"  # 指 EIP，只給 STUN
 origin_domain = f"origin-{hostname}.{zone_name}"  # 指 EIP，CloudFront 回源用，Let's Encrypt 簽這個
 relays_domain = f"relays-{hostname}.{zone_name}"  # 指 relays EIP，signal + relay + stun 直連
 desired_capacity = config.get_int("desired_capacity", 1)  # 主機數
@@ -167,13 +165,6 @@ sg = aws.ec2.SecurityGroup(
             "to_port": 443,
             **only_cloudfront,
         },
-        {
-            "description": "STUN",
-            "protocol": "udp",
-            "from_port": 3478,
-            "to_port": 3478,
-            **anyone,
-        },
     ],
     egress=egress_all,
     tags={"Name": NAME},
@@ -194,7 +185,7 @@ def user_data(role: str) -> pulumi.Output[str]:
         cluster_name=NAME,
         service_name=NAME,
         nb_dir=NB_DIR,
-        images=[LITESTREAM_IMAGE, DASHBOARD_IMAGE, SERVER_IMAGE, STUN_IMAGE, AWS_CLI_IMAGE],
+        images=[LITESTREAM_IMAGE, DASHBOARD_IMAGE, SERVER_IMAGE, AWS_CLI_IMAGE],
     )
 
 
@@ -241,7 +232,6 @@ netbird = NetBirdService(
     litestream_image=LITESTREAM_IMAGE,
     dashboard_image=DASHBOARD_IMAGE,
     server_image=SERVER_IMAGE,
-    stun_image=STUN_IMAGE,
     aws_cli_image=AWS_CLI_IMAGE,
     start_after=[failover.task_events_target, failover.task_events_invoke],
 )
@@ -378,15 +368,6 @@ aws.route53.Record(
     name=dashboard_domain,
     type="A",
     aliases=cloudfront_alias(dashboard),
-)
-
-aws.route53.Record(
-    "stun-record",
-    zone_id=zone.zone_id,
-    name=stun_domain,
-    type="A",
-    ttl=60,
-    records=[eip.public_ip],
 )
 
 aws.route53.Record(

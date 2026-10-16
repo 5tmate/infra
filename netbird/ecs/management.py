@@ -28,7 +28,6 @@ class NetBirdService(pulumi.ComponentResource):
         litestream_image: str,
         dashboard_image: str,
         server_image: str,
-        stun_image: str,
         aws_cli_image: str,
         start_after: Sequence[pulumi.Resource],
         opts: pulumi.ResourceOptions | None = None,
@@ -95,7 +94,6 @@ class NetBirdService(pulumi.ComponentResource):
                     litestream_image=litestream_image,
                     dashboard_image=dashboard_image,
                     server_image=server_image,
-                    stun_image=stun_image,
                     aws_cli_image=aws_cli_image,
                     server_name=certificate_domains[0],
                 )

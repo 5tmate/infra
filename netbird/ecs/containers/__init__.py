@@ -6,7 +6,6 @@ from .litestream import replicate, restores
 from .relay import relay
 from .server import SKIP_HOLD_FILE, server
 from .signal import signal
-from .stun import stun
 
 __all__ = ["SKIP_HOLD_FILE", "container_definitions", "relays_container_definitions"]
 
@@ -22,7 +21,6 @@ def container_definitions(
     litestream_image,
     dashboard_image,
     server_image,
-    stun_image,
     aws_cli_image,
     server_name,
 ):
@@ -39,7 +37,6 @@ def container_definitions(
             logs=logs,
         ),
         server(image=server_image, server_name=server_name, region=region, logs=logs),
-        stun(image=stun_image, logs=logs),
     ]
 
 
