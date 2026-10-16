@@ -58,3 +58,18 @@ CloudTrail 有幾分鐘延遲，腳本結束時會自動跑一次 report.py。�
 - 動到出價的腳本中途按 Ctrl-C 也會把出價改回去
 - `run-fis.sh` 不管正常結束還是中斷，都會刪掉它建的 FIS 範本和 IAM role
 - 斷線時間是從本機經過 CloudFront 量的，連續兩次失敗才算斷，連續兩次成功才算恢復，誤差約 1 到 3 秒。本機網路或 DNS 偶發變慢造成的單次逾時，report.py 會另外列出來，不算斷線
+
+## exit-node.sh（功能測試，跟上面的切換實驗不同）
+
+驗證 exit node：在別的區域開臨時 EC2 當 netbird exit node，從筆電選它上網，確認對外 IP 變成 EC2 的。不量斷線、不碰 `5tmate-netbird` 主機，是獨立的功能測試。需要一把 dashboard 建的 **Reusable setup key** 讓無頭 EC2 加入。
+
+```bash
+# 開兩台（ap-northeast-2、us-west-1 各一台 t4g.nano，裝 netbird 0.81.0、用 key 加入）
+SETUP_KEY=<reusable key> AWS_PROFILE=jerry ./exit-node.sh up
+# 清掉（終止 EC2、刪 security group）
+AWS_PROFILE=jerry ./exit-node.sh down
+```
+
+- 區域、機型、netbird 版本在腳本開頭，用 `REGIONS`、`TYPE` 環境變數可以覆蓋
+- EC2 加入後要在 dashboard 把那兩個 peer 設成 exit node（加 `0.0.0.0/0` route）
+- 兩台一小時約 0.01 美元，測完記得 `down`，並在 dashboard 刪 peer、停用 setup key
