@@ -24,7 +24,6 @@ retry aws ec2 associate-address --allocation-id "$EIP_ALLOC" --instance-id "$IID
 
 grep -q "^ECS_CLUSTER=" /etc/ecs/ecs.config 2>/dev/null || echo "ECS_CLUSTER=${CLUSTER}" >> /etc/ecs/ecs.config
 grep -q "^ECS_IMAGE_PULL_BEHAVIOR=" /etc/ecs/ecs.config || echo "ECS_IMAGE_PULL_BEHAVIOR=prefer-cached" >> /etc/ecs/ecs.config
-systemctl restart ecs || true
 
 cat > /usr/local/bin/relays-renew <<RENEW
 #!/bin/bash
