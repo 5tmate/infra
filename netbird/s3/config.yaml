@@ -34,6 +34,8 @@ server:
       - "https://__DASHBOARD_DOMAIN__/nb-silent-auth"
     cliRedirectURIs:
       - "http://localhost:53000/"
+    dashboardPostLogoutRedirectURIs:
+      - "https://__DASHBOARD_DOMAIN__/"
     owner:
       email: "__OWNER_EMAIL__"
       password: "__OWNER_HASH__"
