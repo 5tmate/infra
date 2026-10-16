@@ -32,6 +32,14 @@ origin_domain = f"origin-{hostname}.{zone_name}"  # 指 EIP，CloudFront 回源�
 desired_capacity = config.get_int("desired_capacity", 1)  # 主機數
 default_tags = pulumi.Config("aws").require_object("defaultTags")
 
+
+def secret_or_random(key: str) -> pulumi.Input[str]:
+    value = config.get_secret(key)
+    if value is not None:
+        return value
+    return pulumi.Output.secret(random.RandomBytes(key.replace("_", "-"), length=32).base64)
+
+
 management_url = f"https://{management_domain}"  # peer、dashboard、登入都連這裡
 exposed_address = f"{management_url}:443"  # signal、relay 跟著走 CloudFront
 stun_uri = f"stun:{stun_domain}:3478"  # peer 直連的 STUN
@@ -98,9 +106,9 @@ server_config = NetBirdConfig(
     stun_uri=stun_uri,
     issuer=idp_url,
     trusted_peers=sorted(entry.cidr for entry in cloudfront_origins.entries),
-    auth_secret=config.require_secret("auth_secret"),
-    session_key=config.require_secret("session_key"),
-    store_encryption_key=config.require_secret("store_encryption_key"),
+    auth_secret=secret_or_random("auth_secret"),
+    session_key=secret_or_random("session_key"),
+    store_encryption_key=secret_or_random("store_encryption_key"),
     owner_email=owner_email,
     owner_password_hash=owner_password_hash,
     acme_email=config.require_secret("acme_email"),

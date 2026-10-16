@@ -7,10 +7,4 @@ config:
     tags:
       App: 5tmate
       ManagedBy: pulumi
-  5tmate-netbird:auth_secret:
-    secure: v1:d4BW5CUAANLrchXT:+AqbBkzyJfUqVWXpkqG0U0t820DpuQVxTD+qF9vFGIuyVLNiu5xyxGOnQZvShU2VVs48vp6PhRlPrbgx
-  5tmate-netbird:session_key:
-    secure: v1:XaraY78kLKxXi8uP:oI4sstnUQc/iJJ6BYAHvwRe6izR/RjrXdtq5DPYcC7Sb7uN/icC7ymlKYr+dcQ52xFknUYvO10ypcmUB
-  5tmate-netbird:store_encryption_key:
-    secure: v1:csQ4w0k3aY1nw/tL:v88ojBar3CfJWpcQ0fCUFbCWN2A89aHxgFZ6qFEQEOZPJhgd8tav/3s/OuEbN1aaWYGvFXp9YoXqwR/O
 encryptionsalt: v1:aLJ7Ttf77QM=:v1:1oaU/3ttVIp0zm/z:IsmyNhbr3Blf/c6Pa4tz4DjG01mzYg==
