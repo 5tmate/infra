@@ -46,8 +46,10 @@ def secret_or_random(key: str) -> pulumi.Input[str]:
 
 
 management_url = f"https://{management_domain}"  # peer、dashboard、登入都連這裡
-exposed_address = f"{management_url}:443"  # signal、relay 跟著走 CloudFront
-stun_uri = f"stun:{stun_domain}:3478"  # peer 直連的 STUN
+exposed_address = f"{management_url}:443"  # management 對外位址，走 CloudFront
+signal_uri = f"https://{relays_domain}:443"  # signal 直連 relays box
+relay_uri = f"rels://{relays_domain}:8443"  # relay 直連 relays box
+stun_uri = f"stun:{relays_domain}:3478"  # STUN 直連 relays box
 idp_url = f"{management_url}/oauth2"  # 登入的 Dex
 health_url = f"{idp_url}/.well-known/openid-configuration"  # Lambda 探活
 
@@ -110,6 +112,8 @@ server_config = NetBirdConfig(
     origin_domain=origin_domain,
     dashboard_domain=dashboard_domain,
     exposed_address=exposed_address,
+    signal_uri=signal_uri,
+    relay_uri=relay_uri,
     stun_uri=stun_uri,
     issuer=idp_url,
     trusted_peers=sorted(entry.cidr for entry in cloudfront_origins.entries),

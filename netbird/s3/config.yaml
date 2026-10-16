@@ -4,6 +4,12 @@ server:
   stuns:
     - uri: "__STUN_URI__"
       proto: "udp"
+  signalUri: "__SIGNAL_URI__"
+  relays:
+    addresses:
+      - "__RELAY_URI__"
+    secret: "__AUTH_SECRET__"
+    credentialsTTL: "24h"
   metricsPort: 9090
   healthcheckAddress: "127.0.0.1:9000"
   logLevel: "info"
