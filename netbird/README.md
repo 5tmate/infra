@@ -25,3 +25,15 @@ ecs/                   NetBirdService、containers.py
 cloudfront/            Cdn
 experiments/           切換實驗的腳本
 ```
+
+## 第一次登入
+
+帳號
+```
+admin@<zone_name>
+```
+
+密碼
+```shell
+pulumi stack output --show-secrets owner_password
+```
