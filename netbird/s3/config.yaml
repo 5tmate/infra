@@ -1,9 +1,7 @@
 server:
   listenAddress: ":443"
   exposedAddress: "__EXPOSED_ADDRESS__"
-  stuns:
-    - uri: "__STUN_URI__"
-      proto: "udp"
+  stuns: __STUNS__
   signalUri: "__SIGNAL_URI__"
   relays:
     addresses:

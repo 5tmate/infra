@@ -15,10 +15,10 @@ STANDBY_NAME = f"{NAME}-standby"
 NB_DIR = "/opt/netbird"
 INSTANCE_TYPES = ["t4g.small", "t4g.medium", "m6g.medium"]
 LITESTREAM_IMAGE = "litestream/litestream:0.5.17"
-DASHBOARD_IMAGE = "netbirdio/dashboard:v2.93.0"
-SERVER_IMAGE = "netbirdio/netbird-server:0.79.0-rc.1"
-SIGNAL_IMAGE = "netbirdio/signal:0.79.0-rc.1"
-RELAY_IMAGE = "netbirdio/relay:0.79.0-rc.1"
+DASHBOARD_IMAGE = "netbirdio/dashboard:v2.96.0"
+SERVER_IMAGE = "netbirdio/netbird-server:0.82.0"
+SIGNAL_IMAGE = "netbirdio/signal:0.82.0"
+RELAY_IMAGE = "netbirdio/relay:0.82.0"
 CERTS_IMAGE = "certbot/dns-route53:v2.11.0"
 AWS_CLI_IMAGE = "public.ecr.aws/aws-cli/aws-cli:2.37.1"
 AMI_PARAMETER = "/aws/service/ecs/optimized-ami/amazon-linux-2023/arm64/recommended/image_id"
@@ -33,21 +33,49 @@ origin_domain = f"origin-{hostname}.{zone_name}"  # 指 EIP，CloudFront 回源�
 relays_domain = f"relays-{hostname}.{zone_name}"  # 指 relays EIP，signal + relay + stun 直連
 desired_capacity = config.get_int("desired_capacity", 1)  # 主機數
 relays_instance_type = config.get("relays_instance_type", "t4g.nano")  # relays 機型
+self_stun = config.get_bool("self_stun", True)  # 自架 STUN(relays box)開關
+public_stuns = list(config.get_object("public_stuns") or [])  # 額外公開 STUN uri 清單
+login_geo_allow = list(config.get_object("login_geo_allow") or [])  # 允許登入的國別,空=不裝 WAF
 default_tags = pulumi.Config("aws").require_object("defaultTags")
 
 
-def secret_or_random(key: str) -> pulumi.Input[str]:
-    value = config.get_secret(key)
-    if value is not None:
-        return value
-    return pulumi.Output.secret(random.RandomBytes(key.replace("_", "-"), length=32).base64)
+def s3_secret(key: str, make) -> pulumi.Output[str]:
+    s3_key = f"secrets/{key}"
+    try:
+        body = aws.s3.get_object(bucket=BACKUP_BUCKET, key=s3_key).body
+    except Exception as exc:
+        if not any(m in str(exc) for m in ("NoSuchKey", "NoSuchBucket", "NotFound", "404")):
+            raise
+        value = make()
+        aws.s3.BucketObject(
+            f"secret-{key.replace('_', '-')}",
+            bucket=backup.bucket.id,
+            key=s3_key,
+            content=value,
+            content_type="text/plain",
+            opts=pulumi.ResourceOptions(retain_on_delete=True),
+        )
+        return pulumi.Output.secret(value)
+    return pulumi.Output.secret(body.strip())
+
+
+def random_b64(name: str) -> pulumi.Output[str]:
+    return random.RandomBytes(name, length=32).base64
+
+
+def new_owner_hash() -> pulumi.Output[str]:
+    password = random.RandomPassword("owner-password", length=20, special=False)
+    pulumi.export("owner_password", password.result)
+    return password.bcrypt_hash
 
 
 management_url = f"https://{management_domain}"  # peer、dashboard、登入都連這裡
 exposed_address = f"{management_url}:443"  # management 對外位址，走 CloudFront
 signal_uri = f"https://{relays_domain}:443"  # signal 直連 relays box
 relay_uri = f"rels://{relays_domain}:8443"  # relay 直連 relays box
-stun_uri = f"stun:{relays_domain}:3478"  # STUN 直連 relays box
+stun_uris = (
+    [f"stun:{relays_domain}:3478"] if self_stun else []
+) + public_stuns  # 自架(self_stun 控制)與公開 STUN 併成一份清單,無主備之分
 idp_url = f"{management_url}/oauth2"  # 登入的 Dex
 health_url = f"{idp_url}/.well-known/openid-configuration"  # Lambda 探活
 
@@ -91,17 +119,16 @@ backup = PrivateBucket(
     "backup",
     bucket=BACKUP_BUCKET,
     adopt=bucket_exists(BACKUP_BUCKET),
-    tags={"Name": BACKUP_BUCKET, "Purpose": "litestream-backup"},
+    tags={"Name": BACKUP_BUCKET},
 )
 
 owner_email = config.get("owner_email") or f"admin@{zone_name}"
-owner_password_hash = config.get_secret("owner_password_hash")
-if owner_password_hash is None:
-    owner_password = random.RandomPassword("owner-password", length=20, special=False)
-    owner_password_hash = owner_password.bcrypt_hash
-    pulumi.export("owner_password", owner_password.result)
+owner_password_hash = s3_secret("owner_password_hash", new_owner_hash)
 
-auth_secret = secret_or_random("auth_secret")
+auth_secret = s3_secret("auth_secret", lambda: random_b64("auth-secret"))
+acme_email = pulumi.Output.secret(
+    aws.ssm.get_parameter(name="/5tmate/netbird/acme_email", with_decryption=True).value
+)
 
 server_config = NetBirdConfig(
     "config",
@@ -112,15 +139,17 @@ server_config = NetBirdConfig(
     exposed_address=exposed_address,
     signal_uri=signal_uri,
     relay_uri=relay_uri,
-    stun_uri=stun_uri,
+    stun_uris=stun_uris,
     issuer=idp_url,
     trusted_peers=sorted(entry.cidr for entry in cloudfront_origins.entries),
     auth_secret=auth_secret,
-    session_key=secret_or_random("session_key"),
-    store_encryption_key=secret_or_random("store_encryption_key"),
+    session_key=s3_secret("session_key", lambda: random_b64("session-key")),
+    store_encryption_key=s3_secret(
+        "store_encryption_key", lambda: random_b64("store-encryption-key")
+    ),
     owner_email=owner_email,
     owner_password_hash=owner_password_hash,
-    acme_email=config.require_secret("acme_email"),
+    acme_email=acme_email,
 )
 
 only_cloudfront = {"prefix_list_ids": [cloudfront_origins.id]}
@@ -278,7 +307,19 @@ relays_sg = aws.ec2.SecurityGroup(
             "to_port": 8443,
             **anyone,
         },
-        {"description": "STUN", "protocol": "udp", "from_port": 3478, "to_port": 3478, **anyone},
+        *(
+            [
+                {
+                    "description": "STUN",
+                    "protocol": "udp",
+                    "from_port": 3478,
+                    "to_port": 3478,
+                    **anyone,
+                }
+            ]
+            if self_stun
+            else []
+        ),
     ],
     egress=egress_all,
     tags={"Name": f"{NAME}-relays"},
@@ -316,9 +357,10 @@ relays_service = RelaysService(
     relay_image=RELAY_IMAGE,
     domain=relays_domain,
     auth_secret=auth_secret,
-    acme_email=config.require_secret("acme_email"),
+    acme_email=acme_email,
     zone_id=zone.zone_id,
     nb_dir=NB_DIR,
+    enable_stun=self_stun,
 )
 
 dashboard = Cdn(
@@ -336,7 +378,82 @@ dashboard = Cdn(
     response_headers_policy=None,
     grpc_enabled=False,
     forwarded_for_paths=[],
+    geo_whitelist=login_geo_allow,
 )
+
+login_waf = None
+if login_geo_allow:
+    oidc_discovery_path = "/oauth2/.well-known/openid-configuration"
+    login_waf = aws.wafv2.WebAcl(
+        "login-geo",
+        name=f"{NAME}-login-geo",
+        scope="CLOUDFRONT",
+        default_action={"allow": {}},
+        rules=[
+            {
+                "name": "allow-oidc-discovery",
+                "priority": 0,
+                "action": {"allow": {}},
+                "statement": {
+                    "byte_match_statement": {
+                        "search_string": oidc_discovery_path,
+                        "field_to_match": {"uri_path": {}},
+                        "positional_constraint": "EXACTLY",
+                        "text_transformations": [
+                            {"priority": 0, "type": "URL_DECODE"},
+                            {"priority": 1, "type": "NORMALIZE_PATH"},
+                            {"priority": 2, "type": "LOWERCASE"},
+                        ],
+                    }
+                },
+                "visibility_config": {
+                    "sampled_requests_enabled": True,
+                    "cloudwatch_metrics_enabled": True,
+                    "metric_name": f"{NAME}-allow-discovery",
+                },
+            },
+            {
+                "name": "allow-taiwan",
+                "priority": 1,
+                "action": {"allow": {}},
+                "statement": {"geo_match_statement": {"country_codes": login_geo_allow}},
+                "visibility_config": {
+                    "sampled_requests_enabled": True,
+                    "cloudwatch_metrics_enabled": True,
+                    "metric_name": f"{NAME}-allow-taiwan",
+                },
+            },
+            {
+                "name": "block-login",
+                "priority": 2,
+                "action": {"block": {}},
+                "statement": {
+                    "byte_match_statement": {
+                        "search_string": "/oauth2",
+                        "field_to_match": {"uri_path": {}},
+                        "positional_constraint": "STARTS_WITH",
+                        "text_transformations": [
+                            {"priority": 0, "type": "URL_DECODE"},
+                            {"priority": 1, "type": "NORMALIZE_PATH"},
+                            {"priority": 2, "type": "LOWERCASE"},
+                        ],
+                    }
+                },
+                "visibility_config": {
+                    "sampled_requests_enabled": True,
+                    "cloudwatch_metrics_enabled": True,
+                    "metric_name": f"{NAME}-block-login",
+                },
+            },
+        ],
+        visibility_config={
+            "sampled_requests_enabled": True,
+            "cloudwatch_metrics_enabled": True,
+            "metric_name": f"{NAME}-login-geo",
+        },
+        tags={"Name": f"{NAME}-login-geo"},
+        opts=pulumi.ResourceOptions(provider=us_east_1),
+    )
 
 management = Cdn(
     "management",
@@ -353,6 +470,7 @@ management = Cdn(
     response_headers_policy="Managed-CORS-With-Preflight",
     grpc_enabled=True,
     forwarded_for_paths=[f"/management.ManagementService/{m}" for m in PEER_IP_METHODS],
+    web_acl_arn=(login_waf.arn if login_waf else None),
 )
 
 

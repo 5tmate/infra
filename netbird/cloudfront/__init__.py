@@ -98,6 +98,8 @@ class Cdn(pulumi.ComponentResource):
         response_headers_policy: str | None,
         grpc_enabled: bool,
         forwarded_for_paths: Sequence[str],
+        geo_whitelist: Sequence[str] = (),
+        web_acl_arn: pulumi.Input[str] | None = None,
         opts: pulumi.ResourceOptions | None = None,
     ):
         super().__init__("netbird:cloudfront:Cdn", name, None, opts)
@@ -161,7 +163,14 @@ class Cdn(pulumi.ComponentResource):
             ],
             default_cache_behavior=behavior,
             ordered_cache_behaviors=ordered_behaviors,
-            restrictions={"geo_restriction": {"restriction_type": "none"}},
+            web_acl_id=web_acl_arn,
+            restrictions={
+                "geo_restriction": (
+                    {"restriction_type": "whitelist", "locations": list(geo_whitelist)}
+                    if geo_whitelist
+                    else {"restriction_type": "none"}
+                )
+            },
             viewer_certificate={
                 "acm_certificate_arn": certificate_arn,
                 "ssl_support_method": "sni-only",

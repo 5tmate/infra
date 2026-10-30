@@ -50,6 +50,7 @@ def relays_container_definitions(
     domain,
     auth_secret_arn,
     acme_email,
+    enable_stun,
 ):
     logs = make_logs(log_group, region)
     cert_dir = "/etc/letsencrypt/live/relays"
@@ -68,5 +69,6 @@ def relays_container_definitions(
             auth_secret_arn=auth_secret_arn,
             cert_dir=cert_dir,
             logs=logs,
+            enable_stun=enable_stun,
         ),
     ]

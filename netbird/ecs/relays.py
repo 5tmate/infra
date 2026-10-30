@@ -23,6 +23,7 @@ class RelaysService(pulumi.ComponentResource):
         auth_secret: pulumi.Input[str],
         acme_email: pulumi.Input[str],
         nb_dir: str,
+        enable_stun: bool,
         opts: pulumi.ResourceOptions | None = None,
     ):
         super().__init__("netbird:ecs:RelaysService", name, None, opts)
@@ -91,6 +92,7 @@ class RelaysService(pulumi.ComponentResource):
                     domain=domain,
                     auth_secret_arn=secret.arn,
                     acme_email=acme_email,
+                    enable_stun=enable_stun,
                 )
             ),
             tags=tags,
