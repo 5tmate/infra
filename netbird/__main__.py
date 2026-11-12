@@ -101,9 +101,9 @@ network = Network(
     subnet_cidr="10.2.0.0/28",
     second_subnet_cidr="10.2.0.32/28",
     standby_subnet_cidr="10.2.0.16/28",
-    az="ap-northeast-1a",
-    second_az="ap-northeast-1d",
-    standby_az="ap-northeast-1c",
+    az="ap-east-2a",
+    second_az="ap-east-2c",
+    standby_az="ap-east-2b",
 )
 
 
